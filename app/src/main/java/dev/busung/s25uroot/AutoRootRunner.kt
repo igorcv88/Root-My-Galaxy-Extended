@@ -61,11 +61,18 @@ internal class AutoRootRunner(
         }
 
         onStage(AutoRootStage.VerifyingRoot)
-        val verification = runHelper("--ksu-info")
-        require(verification.code == 0) {
-            context.getString(R.string.error_ksu_verify, verification.code, verification.output)
+        val verification = runCatching { runHelper("--ksu-info") }.getOrNull()
+        val nativeActive = NativeProbe.isKernelSuActive()
+        require(verification?.code == 0 || nativeActive) {
+            context.getString(
+                R.string.error_ksu_verify,
+                verification?.code ?: -1,
+                verification?.output ?: "KernelSU control channel is not active",
+            )
         }
-        if (verification.output.isNotBlank()) onLog(verification.output)
+        if (verification?.code == 0 && verification.output.isNotBlank()) {
+            onLog(verification.output)
+        }
         onLog(context.getString(R.string.log_ksu_control_verified))
     }
 
@@ -81,12 +88,16 @@ internal class AutoRootRunner(
                     return true
                 }
             }
+            // Compatibility with the pre-v0266 helper, which has no --ksu-info.
+            // NativeProbe observes the KernelSU control channel directly and is
+            // sufficient to prove that auto/client late-load already succeeded.
+            if (NativeProbe.isKernelSuActive()) return true
             delay(AUTO_LATE_LOAD_POLL_INTERVAL)
         }
         if (lastOutput.isNotBlank()) {
             onLog("[*] auto-late-load probe: ${lastOutput.takeLast(240)}")
         }
-        return false
+        return NativeProbe.isKernelSuActive()
     }
 
     private suspend fun executeExploit(payload: File, bootToken: String) {
