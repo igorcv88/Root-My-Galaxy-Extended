@@ -24,10 +24,17 @@ class PostRootModuleKeeperTest {
             "11111111-2222-3333-4444-555555555555",
         )
 
-        assertFalse(script.contains("ksud post-fs-data"))
-        assertFalse(script.contains("ksud services"))
-        assertFalse(script.contains("ksud boot-completed"))
-        assertTrue(script.contains("kill -9"))
+        // Comments intentionally document why the lifecycle is not replayed, so
+        // test executable shell lines rather than rejecting those words anywhere
+        // in the generated script text.
+        val executable = script.lineSequence()
+            .map(String::trim)
+            .filter { it.isNotBlank() && !it.startsWith("#") }
+            .joinToString("\n")
+
+        val replay = Regex("""(^|[;&|]\s*)ksud\s+(post-fs-data|services|boot-completed)(\s|$)""")
+        assertFalse(replay.containsMatchIn(executable))
+        assertTrue(executable.contains("kill -9"))
         assertTrue(script.contains(PostRootModuleKeeper.DONE_MARKER))
     }
 
@@ -37,8 +44,12 @@ class PostRootModuleKeeperTest {
             "11111111-2222-3333-4444-555555555555",
         )
 
-        assertTrue(script.contains("/data/adb/modules/meta-overlayfsx"))
-        assertTrue(script.contains("/data/adb/metamodule/mnt"))
+        // The generated shell factors /data/adb/metamodule into OVERLAY_HOME;
+        // verify the actual variable-based mount probe instead of requiring an
+        // expanded literal path that never appears in the source string.
+        assertTrue(script.contains("OVERLAY_META='/data/adb/modules/meta-overlayfsx'"))
+        assertTrue(script.contains("OVERLAY_HOME='/data/adb/metamodule'"))
+        assertTrue(script.contains("${'$'}OVERLAY_HOME/mnt"))
         assertTrue(script.contains("OverlayFSx kernel inspector did not report success"))
         assertTrue(script.contains("Granular ViPER mounting completed without partition-root overlays"))
         assertTrue(script.contains("unsafe broad ViPER root overlay detected"))
