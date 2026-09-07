@@ -5,7 +5,6 @@
 <p align="center">
   <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/igorcv88/Root-My-Galaxy-S938B?label=release" /></a>
   <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/igorcv88/Root-My-Galaxy-S938B/total" /></a>
-  <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/stargazers"><img alt="Stars" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Figorcv88%2FRoot-My-Galaxy-S938B&amp;query=%24.stargazers_count&amp;label=stars&amp;logo=github&amp;labelColor=555&amp;color=2f81f7&amp;style=flat" /></a>
   <img alt="Android" src="https://img.shields.io/badge/Android-16-3DDC84?logo=android&amp;logoColor=white" />
   <img alt="KernelSU" src="https://img.shields.io/badge/KernelSU-3.3.0-2f81f7" />
   <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/actions/workflows/release.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/igorcv88/Root-My-Galaxy-S938B/release.yml?branch=main&amp;label=build" /></a>
@@ -13,132 +12,176 @@
 </p>
 
 <p align="center">
-  <strong>Temporary KernelSU root for supported Samsung Galaxy firmware without unlocking the bootloader or flashing a modified boot image.</strong>
+  <strong>Temporary KernelSU root for the maintained Samsung Galaxy S25 Ultra firmware without unlocking the bootloader or flashing a modified boot image.</strong>
 </p>
 
 <p align="center">
   <a href="https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B">Payloads</a>
   ·
-  <a href="https://github.com/BuSung-dev/Root-My-Galaxy">Upstream</a>
+  <a href="https://github.com/BuSung-dev/Root-My-Galaxy">Upstream app</a>
   ·
   <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases/latest">Latest release</a>
 </p>
 
-Root My Galaxy checks the device, downloads the matching payload, runs the kernel exploit and late-loads KernelSU. Root lasts for the current kernel boot; **Auto Root** can restore it automatically after a full reboot.
-
 > [!WARNING]
-> This software uses a kernel exploit. Root acquisition is timing-sensitive, may take from seconds to several minutes, and a failed attempt can cause a kernel panic/reboot. Use it only on a device you own or are explicitly authorized to test.
+> This software uses a kernel exploit. A failed run can panic/reboot the device. Use it only on a device you own or are explicitly authorized to test.
 
-## Why this fork?
-
-Compared with [upstream Root My Galaxy](https://github.com/BuSung-dev/Root-My-Galaxy), this fork currently adds:
-
-- **Auto Root** after a full reboot, using the last payload set that successfully rooted the device.
-- **KernelSU 3.3.0 / 32601** with the Samsung late-load fixes maintained for this device.
-- **Strict CZG3 validation** with exact device/firmware/kernel matching and SHA-256 verification.
-- **A deliberately minimal CZG3 runtime**, restored to the pre-instrumentation exploit path without External Observer, race telemetry, pselect state gates or SIGRETURN experiments.
-- **Configurable launch uptime** and an optional **KernelSU soft reboot after root**, both configured before execution in Settings.
-
-Shizuku support, Advanced mode, installation history and much of the base UI originate from upstream and are therefore not fork-exclusive features.
-
-## Compatibility
-
-The app itself is not inherently limited to one Galaxy model, and upstream maintains a broader device catalog. The automatic profile currently maintained in this fork is:
+## Maintained target
 
 | | Current profile |
 | --- | --- |
-| Device | Samsung Galaxy S25 Ultra `SM-S938B` (`pa3q`) |
+| Device | Galaxy S25 Ultra `SM-S938B` (`pa3q`) |
 | Firmware | `S938BXXSBCZG3` |
+| Build display | `BP4A.251205.006.S938BXXSBCZG3` |
 | Android | Android 16 / API 36 |
 | Kernel | `6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k` |
-| ABI | `arm64-v8a` |
-| Page size | 4K |
+| ABI / page size | `arm64-v8a` / 4K |
 
-Firmware updates can change the kernel and invalidate the exploit profile. Automatic installation stops when the maintained profile no longer matches.
+Firmware or kernel updates can invalidate this exact profile.
 
-## Installation
+## What this fork adds
 
-1. Download the latest signed APK from [GitHub Releases](https://github.com/igorcv88/Root-My-Galaxy-S938B/releases/latest).
-2. Install and open **Root My Galaxy**.
-3. Optional: enable **Use Shizuku** in Settings if Shizuku is already running.
-4. Optional: adjust **Diagnostic Launch Time**. For CZG3 the default is 120 seconds of total boot uptime.
-5. Optional: enable **Soft reboot after root** if Android userspace should restart automatically after KernelSU is verified.
-6. Tap **Install KernelSU** and keep the installer open while the exploit runs.
-7. When **KernelSU active** appears, open or install KernelSU Manager.
-8. Optional: enable **Automatic root after reboot**.
+Compared with the base Root My Galaxy app, this fork currently adds or changes:
 
-The app does not unlock the bootloader, flash `boot` or replace the Samsung kernel.
+- exact CZG3 identity matching and SHA-256-verified payload/helper coupling;
+- KernelSU 3.3.0 / 32601;
+- explicit **Manual Online** and **Manual Offline** modes;
+- a last-known-good offline payload set published only after a successful verified Manual Online root;
+- **Auto Root** that is always Offline + Standalone and never depends on Shizuku or network access to acquire root;
+- a foreground boot gate plus a fresh `:autoroot_exec` process for the exploit handoff;
+- configurable total boot-uptime launch gate (default 120 s on CZG3);
+- v0266 root-helper auto-late-load support with app-side late-load fallback;
+- persistent local Wireless ADB pairing and automatic Shizuku restart after root;
+- a KernelSU userspace lifecycle soft reboot route (`post-fs-data → services → boot-completed → zygote restart`);
+- installation History with captured logs and per-run export.
+
+The exploit race itself remains deliberately small: the app does not reintroduce the former External Observer, pselect gate, SIGRETURN interception, syscall wrappers or race telemetry into the critical path.
+
+## Root path
+
+The current intended flow is:
+
+```text
+Manual Online / Manual Offline / Auto Root
+                  ↓
+          verified v0266 set
+                  ↓
+       CVE-2026-43499 exploit
+                  ↓
+          bootstrap UID 0
+                  ↓
+ root helper auto-late-loads KernelSU
+                  ↓
+     KernelSU control verification
+                  ↓
+       root result is checkpointed
+                  ↓
+  optional post-root userspace actions
+```
+
+The v0266 helper can late-load KernelSU immediately after root lands, avoiding a second client round trip. If that path is not ready, the app retains the explicit client `--late-load` fallback.
+
+## Manual Online and Offline
+
+**Manual Online** resolves the exact support feed, downloads the exploit and KernelSU payload from a commit-pinned revision, verifies size/SHA-256 and verifies that the APK-bundled root helper matches the feed's `rootHelper` metadata.
+
+Only after exploit success and KernelSU verification does the app publish that exact set as the new last-known-good cache.
+
+**Manual Offline** uses only that cache. It performs no hidden network fallback. Auto Root uses the same verified offline set.
+
+Caches created before v0266 root-helper metadata are intentionally rejected once the new helper is shipped; run Manual Online once to establish a helper-bound cache.
 
 ## Auto Root
 
-After a successful manual root, Root My Galaxy keeps the verified payload set locally. On the next **full reboot**, Auto Root reuses those same files and does not need internet access.
+Auto Root is intentionally different from ordinary manual execution in only the ways needed for boot reliability:
 
-Publishing a newer payload therefore does not invalidate an already working Auto Root setup. A newer payload only replaces the Auto Root set after it has also completed a successful manual root on the device.
+```text
+BOOT_COMPLETED
+      ↓
+foreground gate service
+      ↓
+wait for configured total boot uptime
+      ↓
+bind fresh :autoroot_exec process
+      ↓
+Offline + Standalone exploit
+      ↓
+KernelSU verification
+      ↓
+History result
+      ↓
+post-root automation
+```
 
-Auto Root runs at most once per full kernel boot. Soft/userspace reboots keep the current kernel boot and do not schedule another exploit run.
+It never chooses Shizuku automatically, never downloads a payload and runs at most once per full kernel boot. A soft/userspace reboot keeps the same kernel boot and does not schedule another exploit attempt.
 
-For exact CZG3, the selected **Diagnostic Launch Time** is a minimum total boot uptime, not an extra delay added after `BOOT_COMPLETED`. The default is 120 seconds and the available values are 0, 30, 60, 90, 120, 180, 300 and 600 seconds.
+## Launch uptime
 
-Despite the historical name, this setting performs no diagnostics: it is only an Android-side uptime gate based on `SystemClock.elapsedRealtime()`.
+For exact CZG3, **Diagnostic Launch Time** is now only a historical UI name. It performs no diagnostics. It is a minimum total boot uptime measured with `SystemClock.elapsedRealtime()`.
+
+Available values: `0 / 30 / 60 / 90 / 120 / 180 / 300 / 600` seconds. Default: **120 s**.
+
+## Wireless ADB and Shizuku without Tasker
+
+Root acquisition never depends on Wireless ADB or Shizuku. They are post-root features only.
+
+The app now contains a local ADB client and a persistent ADB key. One-time setup uses Android Wireless Debugging pairing (TLS + SPAKE2). On Android 13+, the app first requests notification access from a visible activity because the six-digit pairing code is entered through the pairing foreground-service notification.
+
+After the first successful pairing/root bootstrap, the app uses KernelSU shell root to grant itself `WRITE_SECURE_SETTINGS`. Future boots can then:
+
+1. enable `adb_wifi_enabled` locally;
+2. discover the dynamic Wireless Debugging port through mDNS;
+3. authenticate to `127.0.0.1` with the saved key;
+4. verify `su -c id` through KernelSU `--allow-shell`;
+5. execute Shizuku's official `start.sh`;
+6. wait for the Shizuku Binder to become available.
+
+If pairing is missing during Auto Root, root still succeeds; the post-root step records that pairing is required instead of turning the exploit result into failure.
 
 ## Soft reboot after root
 
-The soft reboot option is configured in **Settings before root starts**. When enabled, a successful manual or automatic root asks the bootstrap root helper to invoke KernelSU's userspace restart command.
-
-The path is intentionally small:
+The previous bootstrap-socket soft-reboot handoff has been replaced. When enabled, and only after root is already verified, the app uses the authenticated local ADB/KernelSU shell to run the userspace lifecycle proven by the HyperRamzey fork:
 
 ```text
-bootstrap root helper
-        ↓
-/data/adb/ksud soft-reboot
-        ↓
-Android userspace restart
+ksud post-fs-data
+      ↓
+ksud services
+      ↓
+ksud boot-completed
+      ↓
+restart zygote / zygote64
 ```
 
-If `/data/adb/ksud` is unavailable, the app can use the staged `/data/local/tmp/ksud-s25u-kdp` binary. This feature does not add exploit observers or race instrumentation.
+The root result is checkpointed before this phase. A Wireless ADB, Shizuku or soft-reboot failure is therefore logged as a post-root failure and does not retroactively mark a verified root as failed.
 
-## Minimal CZG3 runtime
+## v0266 payload/helper binding
 
-The maintained CZG3 payload intentionally uses the pre-instrumentation exploit path. The production runtime does not link the experimental diagnostics introduced during the reliability investigation, including External Observer coupling, `czg3_diag`, pselect state gates, Auto SIGRETURN interception or global syscall wrapping.
+The v3 feed can declare a `rootHelper` artifact alongside `exploit` and `kernelsu`. The release workflow resolves the payload repository `main` to an immutable commit, verifies the helper size/SHA-256, embeds exactly that helper into the APK, and records provenance in the release build.
 
-Historical investigation notes remain useful as research material, but they are not part of the production exploit hot path.
-
-## Shizuku
-
-Shizuku is optional. When enabled, Root My Galaxy can use its shell context for payload execution and staging. Shizuku must already be running and the app must already have permission.
-
-If Shizuku is unavailable, disable **Use Shizuku** to use the standalone path.
-
-## Advanced mode
-
-Advanced mode allows manual payload selection instead of automatic matching. Use it only when deliberately testing a known-compatible profile; an incompatible payload can crash the device.
+Offline cache IDs include the exploit, KernelSU and helper digests. Legacy caches without helper metadata are fail-closed and must be refreshed by Manual Online.
 
 ## History and logs
 
-The **History** tab records installation attempts, results, selected payloads, transport and captured runtime logs. The restored minimal runtime intentionally does not add structured race telemetry to those logs.
+History records manual and automatic runs, selected profile, result and captured runtime log. The critical exploit path does not continuously fsync History during the race; terminal state is persisted outside the sensitive race window.
 
-Open a run for details or use **Export log** when troubleshooting.
+Open an individual run to export its log. Bulk selected/all-log export is being restored separately and is not required for root execution.
 
-## App updates
+## Building
 
-Root My Galaxy can check this repository for newer releases and open the Android installer directly from the app. You can also use **Settings → Check for updates**.
+The release workflow runs unit tests, Android lint and release assembly before signing/publishing the APK. The workflow also verifies that the helper embedded in the APK matches the current commit-pinned payload feed.
 
-## KernelSU
+## Credits and provenance
 
-This fork currently integrates **KernelSU 3.3.0 / 32601** through late-load. KernelSU Manager handles root permissions and KernelSU modules after root becomes active.
+This fork combines work from several projects and contributors. Credit is explicit because substantial parts of the implementation are derived or adapted rather than newly invented here.
 
-Root My Galaxy does not install Magisk or APatch and does not manage Zygisk, LSPosed or other KernelSU modules itself.
+- **[BuSung-dev/Root-My-Galaxy](https://github.com/BuSung-dev/Root-My-Galaxy)** — upstream application architecture, UI, installer flow, Shizuku integration, History and the original Root My Galaxy project.
+- **[BuSung-dev/Root-My-Galaxy-Payloads](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads)** — upstream payload/feed architecture and Samsung exploit integration used by the companion payload repository.
+- **[HyperRamzey/Root-My-Galaxy](https://github.com/HyperRamzey/Root-My-Galaxy)** — source for the persistent local Wireless ADB key/pairing stack, mDNS discovery, local ADB client, post-root Shizuku automation and the KernelSU userspace lifecycle/zygote-restart approach adapted in this fork.
+- **[mitschud](https://github.com/mitschud)** / **[BuSung payload PR #300](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads/pull/300)** — hardware-tested Tracefs KASLR route and the root-helper auto-late-load design (`--allow-shell`, DEFEX-safe bind execution, daemon-stay and late-load markers) adapted to CZG3 v0266.
+- **[NebuSec/CyberMeowfia](https://github.com/NebuSec/CyberMeowfia/tree/main/IonStack/CVE-2026-43499/exploit)** — published CVE-2026-43499 exploit source on which the payload lineage is based.
+- **[KernelSU](https://github.com/tiann/KernelSU)** by tiann and contributors — kernel root framework, manager and `ksud` lifecycle used after bootstrap root.
+- **[Shizuku](https://github.com/RikkaApps/Shizuku)** by RikkaApps and contributors — Shizuku API/provider and official `start.sh` integration.
+- **Android Open Source Project / BoringSSL** — protocol reference for ADB authentication, Wireless Debugging TLS pairing and the SPAKE2/pairing-auth behavior mirrored by the local pairing implementation.
+- **[Bouncy Castle](https://www.bouncycastle.org/)** — cryptographic provider used by the local ADB key/certificate and pairing implementation.
 
-## Common problems
-
-**Support check failed:** the current device, firmware or kernel does not match an automatic profile.
-
-**Root is taking a long time:** acquisition is timing-sensitive. The clean CZG3 baseline intentionally avoids adding observer or telemetry overhead while this behavior is re-evaluated.
-
-**The phone rebooted during the exploit:** a failed exploit attempt can trigger a kernel panic. Let Android boot normally before another attempt.
-
-**Auto Root failed:** it attempts restoration only once for that full kernel boot. Open the app and perform a manual installation if needed.
-
-## License and credits
-
-This project is distributed under the license in [LICENSE](LICENSE). It is derived from [BuSung-dev/Root-My-Galaxy](https://github.com/BuSung-dev/Root-My-Galaxy) and uses [KernelSU](https://github.com/tiann/KernelSU) for kernel-based root management.
+Each upstream project remains subject to its own license and copyright notices. This repository is distributed under the license in [LICENSE](LICENSE).

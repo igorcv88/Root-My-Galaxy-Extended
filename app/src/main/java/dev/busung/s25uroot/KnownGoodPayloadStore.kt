@@ -120,6 +120,15 @@ internal object KnownGoodPayloadStore {
         require(profile.exactMatch != null && profile.matches(DeviceSnapshot.current())) {
             context.getString(R.string.autoroot_unsupported_firmware)
         }
+
+        // v0265-era caches predate the root-helper binding. Once the APK ships a
+        // v0266 helper, accepting one of those old two-hash cache IDs would pair
+        // an old exploit with a different helper. Parser compatibility is kept,
+        // but executable offline state is deliberately invalidated and must be
+        // refreshed by one successful Manual Online run.
+        require(profile.rootHelper != null) {
+            "Offline payload cache predates root-helper verification; run Manual Online successfully to refresh it"
+        }
         verifyBundledRootHelper(context, profile)
 
         val exploit = File(directory, EXPLOIT)
@@ -136,7 +145,9 @@ internal object KnownGoodPayloadStore {
     }
 
     private fun verifyBundledRootHelper(context: Context, profile: TargetProfile) {
-        val expected = profile.rootHelper ?: return
+        val expected = requireNotNull(profile.rootHelper) {
+            "Support profile has no root-helper metadata; refresh the v3 feed before caching it offline"
+        }
         val helper = File(context.applicationInfo.nativeLibraryDir, ROOT_HELPER_LIBRARY)
         require(fileMatchesArtifact(helper, expected)) {
             "The cached payload requires a different root helper; update Root My Galaxy and refresh Manual Online"
@@ -144,8 +155,11 @@ internal object KnownGoodPayloadStore {
     }
 
     private fun cacheId(profile: TargetProfile): String {
+        val expected = requireNotNull(profile.rootHelper) {
+            "Cannot create an offline cache without root-helper metadata"
+        }
         val base = "v3-${profile.exploit.sha256.take(16)}-${profile.kernelSu.artifact.sha256.take(16)}"
-        return profile.rootHelper?.let { "$base-${it.sha256.take(16)}" } ?: base
+        return "$base-${expected.sha256.take(16)}"
     }
 
     private fun copyVerified(source: File, destination: File, artifact: RemoteArtifact) {
