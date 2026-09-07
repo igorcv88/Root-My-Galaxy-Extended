@@ -1,8 +1,6 @@
 package dev.busung.s25uroot
 
 import android.content.Context
-import android.content.Intent
-import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -29,20 +27,17 @@ internal object PostRootAutomation {
         if (!softReboot && !startShizuku) return@withContext PostRootResult()
 
         if (!AppPreferences.adbPaired(context)) {
-            if (startShizuku) {
-                runCatching {
-                    ContextCompat.startForegroundService(context, AdbPairingService.startIntent(context))
-                }
-                onLog("[!] ${context.getString(R.string.postroot_adb_not_paired)}")
+            // Pairing is a one-time post-root setup. Starting the FGS here means
+            // the first successful root can bootstrap the replacement for the
+            // old Tasker ADB/Shizuku automation without affecting the exploit.
+            runCatching {
+                ContextCompat.startForegroundService(context, AdbPairingService.startIntent(context))
             }
-            return@withContext PostRootResult(
-                detail = context.getString(R.string.postroot_adb_not_paired),
-            )
+            val detail = context.getString(R.string.postroot_adb_not_paired)
+            onLog("[!] $detail")
+            return@withContext PostRootResult(detail = detail)
         }
 
-        // WRITE_SECURE_SETTINGS is granted best-effort by the root helper when
-        // bootstrap root lands. It persists across reboots, so future boots can
-        // enable Wireless Debugging without Tasker or a PC.
         if (!AdbPairing.isWirelessAdbEnabled(context)) {
             if (!AdbPairing.enableWirelessAdb(context)) {
                 val detail = "WRITE_SECURE_SETTINGS is not granted; cannot enable Wireless Debugging"
@@ -53,7 +48,7 @@ internal object PostRootAutomation {
             delay(1_500)
         }
 
-        var session = runCatching { WirelessAdbSession.open(context, 45_000) }
+        val session = runCatching { WirelessAdbSession.open(context, 45_000) }
             .getOrElse { error ->
                 val detail = error.message ?: error.javaClass.simpleName
                 if (looksLikePairingLoss(detail)) AppPreferences.setAdbPaired(context, false)
@@ -74,56 +69,56 @@ internal object PostRootAutomation {
             }
             onLog("[+] KernelSU --allow-shell verified over local ADB")
 
-            if (softReboot) {
-                val lifecycle = applyKernelSuLifecycle(session, onLog)
-                if (!lifecycle.first) {
-                    return@withContext PostRootResult(detail = lifecycle.second)
-                }
-                rebootStarted = true
-                onLog("[+] ${context.getString(R.string.postroot_soft_reboot_started)}")
-
-                // Restarting zygote may invalidate framework-side connections.
-                // Close cleanly and reconnect after the new userspace settles.
-                session.close()
-                delay(8_000)
-                if (startShizuku) {
-                    session = runCatching { WirelessAdbSession.open(context, 45_000) }
-                        .getOrElse { error ->
-                            val detail = "Wireless ADB did not return after zygote restart: " +
-                                (error.message ?: error.javaClass.simpleName)
-                            onLog("[-] $detail")
-                            return@withContext PostRootResult(
-                                softRebootStarted = true,
-                                detail = detail,
-                            )
-                        }
-                    onLog("[+] Local Wireless ADB reconnected after userspace restart")
+            // One-time self-grant. Once this succeeds, the app can re-enable
+            // Wireless Debugging on subsequent full boots before local ADB is
+            // reachable, which removes the Tasker bootstrap dependency.
+            if (!AdbPairing.hasWriteSecureSettings(context)) {
+                val grant = session.shell(
+                    "su -c 'pm grant ${context.packageName} android.permission.WRITE_SECURE_SETTINGS' 2>&1",
+                )
+                if (grant.exitCode == 0) {
+                    onLog("[+] WRITE_SECURE_SETTINGS granted for future boots")
+                } else {
+                    onLog("[!] WRITE_SECURE_SETTINGS grant failed: ${grant.output.trim().takeLast(180)}")
                 }
             }
 
+            // Start Shizuku before restarting zygote. The Shizuku server is a
+            // shell-owned app_process, not a zygote child, so this avoids a
+            // fragile reconnect-after-restart dependency and matches the goal
+            // of having Shizuku already alive when the UI returns.
             if (startShizuku) {
                 val start = startShizuku(session)
                 if (start.exitCode != 0) {
                     val detail = start.output.trim().ifBlank { "start.sh exit ${start.exitCode}" }
                     onLog("[-] ${context.getString(R.string.postroot_shizuku_failed, detail.takeLast(180))}")
-                    return@withContext PostRootResult(
-                        softRebootStarted = rebootStarted,
-                        detail = detail,
-                    )
-                }
-                onLog(start.output.trim().takeIf(String::isNotBlank)?.let { "[*] $it" }.orEmpty())
-
-                shizukuStarted = ShizukuController.pingUntilRunning(SHIZUKU_BINDER_TIMEOUT_MILLIS)
-                if (shizukuStarted) {
-                    onLog("[+] ${context.getString(R.string.postroot_shizuku_started)}")
+                    if (!softReboot) {
+                        return@withContext PostRootResult(detail = detail)
+                    }
                 } else {
-                    val detail = "Shizuku start.sh returned successfully but Binder did not appear"
-                    onLog("[-] $detail")
+                    val output = start.output.trim()
+                    if (output.isNotBlank()) onLog("[*] $output")
+                    shizukuStarted = ShizukuController.pingUntilRunning(SHIZUKU_BINDER_TIMEOUT_MILLIS)
+                    if (shizukuStarted) {
+                        onLog("[+] ${context.getString(R.string.postroot_shizuku_started)}")
+                    } else {
+                        onLog("[!] Shizuku start.sh returned successfully but Binder did not appear")
+                    }
+                }
+            }
+
+            if (softReboot) {
+                val lifecycle = applyKernelSuLifecycle(session, onLog)
+                if (!lifecycle.first) {
                     return@withContext PostRootResult(
-                        softRebootStarted = rebootStarted,
-                        detail = detail,
+                        shizukuStarted = shizukuStarted,
+                        detail = lifecycle.second,
                     )
                 }
+                rebootStarted = true
+                // This is best-effort: the current app process may disappear as
+                // soon as zygote is restarted, so all important status lines are
+                // emitted before the kill command itself.
             }
         } finally {
             runCatching { session.close() }
@@ -158,6 +153,7 @@ internal object PostRootAutomation {
         stage("services", 5_000).let { if (!it.first) return it }
         stage("boot-completed", 3_000).let { if (!it.first) return it }
 
+        onLog("[*] KernelSU lifecycle complete; restarting zygote now")
         val kill = adb.shell(
             "su -c 'for p in \$(pidof zygote64) \$(pidof zygote); do " +
                 "kill -9 \$p 2>/dev/null; done; echo zygote-killed'",
@@ -183,7 +179,8 @@ internal object PostRootAutomation {
         val lower = message.lowercase()
         return "certificate_unknown" in lower ||
             "certificate unknown" in lower ||
-            "pairing" in lower && "revoked" in lower
+            "pairing" in lower && "revoked" in lower ||
+            LocalAdbClient.PAIRING_LOST_MARKER.lowercase() in lower
     }
 
     private const val SHIZUKU_BINDER_TIMEOUT_MILLIS = 12_000L
