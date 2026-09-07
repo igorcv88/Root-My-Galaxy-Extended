@@ -282,15 +282,16 @@ internal object PostRootModuleKeeper {
             exit 0
         fi
 
-        killed=0
-        for p in ${'$'}OLD; do
-            if kill -9 "${'$'}p" 2>/dev/null; then killed=1; fi
-        done
-        if [ "${'$'}killed" != "1" ]; then
-            log "failed to kill any zygote process"
+        # Ask Android init to own the zygote transition. Sending SIGKILL to
+        # zygote directly is indistinguishable from a crash to Zygisk Next's
+        # crash guard and can leave the replacement zygote uninjected.
+        RESTART_OUT="${'$'}(/system/bin/setprop ctl.restart zygote 2>&1)"
+        RESTART_RC=${'$'}?
+        if [ "${'$'}RESTART_RC" != "0" ]; then
+            log "init-managed zygote restart request failed rc=${'$'}RESTART_RC out=${'$'}RESTART_OUT"
             exit 72
         fi
-        log "zygote restart requested; old pids=${'$'}OLD"
+        log "init-managed zygote restart requested; old pids=${'$'}OLD"
 
         NEW=''
         i=0
@@ -304,7 +305,7 @@ internal object PostRootModuleKeeper {
             i=${'$'}((i + 1))
         done
         if [ -z "${'$'}NEW" ]; then
-            log "new zygote did not appear within 30s"
+            log "new zygote did not appear within 30s after init-managed restart"
             exit 73
         fi
 
