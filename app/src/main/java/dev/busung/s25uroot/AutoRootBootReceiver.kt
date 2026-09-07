@@ -4,15 +4,29 @@ import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 
 class AutoRootBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
 
+        // Shizuku is a boot prerequisite/utility, not a post-root side effect.
+        // Start its paired local-ADB bootstrap immediately on every framework
+        // BOOT_COMPLETED, before any 60/120s Auto Root uptime gate. The service
+        // itself is Binder-first and becomes a no-op when Shizuku is already up.
+        runCatching { ShizukuBootService.startIfConfigured(context) }
+            .onFailure { error ->
+                Log.w(
+                    TAG,
+                    "Unable to launch early Shizuku bootstrap: ${error.message ?: error.javaClass.simpleName}",
+                )
+            }
+
         // Kernel boot_id changes only on a real kernel reboot. A userspace/zygote
         // soft reboot may re-emit BOOT_COMPLETED while keeping this token intact.
         // Consume each kernel boot event once and hard-stop stale Auto Root runtime
-        // on duplicates instead of starting another foreground gate.
+        // on duplicates instead of starting another foreground gate. This gate is
+        // deliberately independent from the Shizuku bootstrap above.
         val bootToken = AutoRootSupport.currentBootToken() ?: return
         if (!AutoRootSupport.claimBootCompletedForKernel(context, bootToken)) {
             stopAutoRootRuntime(context)
@@ -44,6 +58,10 @@ class AutoRootBootReceiver : BroadcastReceiver() {
         context.stopService(Intent(context, AutoRootService::class.java))
         context.getSystemService(NotificationManager::class.java)
             .cancel(AUTO_ROOT_NOTIFICATION_ID)
+    }
+
+    companion object {
+        private const val TAG = "RootMyGalaxyBoot"
     }
 }
 
