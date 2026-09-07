@@ -42,6 +42,11 @@ internal object KnownGoodPayloadStore {
                 "The cached payload does not match the selected profile"
             }
         }
+        // Auto Root is Standalone, so it cannot populate /data/local/tmp before
+        // bootstrap root. Keep a feed-verified app-private source ready for the
+        // v0266 root helper to promote after UID 0 lands. This happens before the
+        // exploit process starts and is skipped when the existing copy matches.
+        KernelSuBootstrapStore.prepare(context, payloads)
         return payloads
     }
 
