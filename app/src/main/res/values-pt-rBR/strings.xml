@@ -131,6 +131,12 @@
     <string name="kernel_version_mismatch_body">Esse celular usa o kernel %1$s, mas o payload que você selecionou suporta o %2$s. Os offsets podem ser incompatíveis.</string>
     <string name="shizuku_mode">Usar Shizuku</string>
     <string name="shizuku_mode_description">Usar o Shizuku para executar o payload. Isso pode melhorar a confiabilidade.</string>
+    <string name="shizuku_boot_section">Inicialização do Shizuku</string>
+    <string name="shizuku_boot_title">Iniciar Shizuku no boot</string>
+    <string name="shizuku_boot_description">O RMG aguarda qualquer Wi‑Fi e inicia o Shizuku sem atrasar o Auto Root. Outros iniciadores, como o do próprio Shizuku ou o Tasker, podem servir como redundância, mas um único iniciador principal evita corridas duplicadas.</string>
+    <string name="shizuku_boot_waiting">Aguardando Wi‑Fi ou um Binder do Shizuku já existente</string>
+    <string name="shizuku_boot_auth_token">Token de autenticação da automação</string>
+    <string name="shizuku_boot_auth_token_description">Fallback opcional por Intent. Copie o token em Shizuku → Control Shizuku with automation apps.</string>
     <string name="shizuku_not_running_title">Shizuku não está em execução</string>
     <string name="shizuku_not_running_body">Inicie o Shizuku com adb ou root primeiro.</string>
     <string name="action_download_shizuku">Baixar o Shizuku</string>
