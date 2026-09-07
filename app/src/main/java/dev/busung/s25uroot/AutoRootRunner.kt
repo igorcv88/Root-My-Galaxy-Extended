@@ -45,13 +45,12 @@ internal class AutoRootRunner(
         if (autoLoaded) {
             // v0266 has already crossed the success boundary: the helper loaded
             // KernelSU in kernel/root context before the app regains control.
-            // Verify that state first. Refreshing the persistent ksud copy is only
-            // maintenance for the next full boot and must never convert this
-            // verified root into a failed run.
+            // Return immediately after verification so the executor can persist
+            // the boot receipt and Succeeded History checkpoint before any
+            // non-critical maintenance or userspace automation begins.
             onLog("[+] KernelSU auto-late-load verified; skipped duplicate late-load")
             onStage(AutoRootStage.VerifyingRoot)
             verifyKernelSu()
-            refreshKernelSuBestEffort(payloads)
             return
         }
 
@@ -207,24 +206,6 @@ internal class AutoRootRunner(
         val stage = stageKernelSuAtomically(payloads)
         require(stage.code == 0) { context.getString(R.string.error_ksu_stage, stage.output) }
         onLog(context.getString(R.string.log_ksu_staged))
-    }
-
-    private suspend fun refreshKernelSuBestEffort(payloads: VerifiedPayloads) {
-        val stage = runCatching { stageKernelSuAtomically(payloads) }.getOrElse { error ->
-            onLog(
-                "[!] Root is verified, but persistent KernelSU refresh failed: " +
-                    (error.message ?: error.javaClass.simpleName),
-            )
-            return
-        }
-        if (stage.code == 0) {
-            onLog(context.getString(R.string.log_ksu_staged))
-        } else {
-            onLog(
-                "[!] Root is verified, but persistent KernelSU refresh failed: " +
-                    stage.output.trim().takeLast(240),
-            )
-        }
     }
 
     private suspend fun stageKernelSuAtomically(payloads: VerifiedPayloads): AutoRootCommandResult {
