@@ -217,10 +217,12 @@ class LocalAdbClient(
         drainStaleMessages("shell")
         Log.d(TAG, "shell: OPEN ${command.take(120)}")
         // The raw ADB `shell:` service does not propagate the command's exit
-        // code (it always closes cleanly). Wrap the command so the exit code
-        // is echoed on a marker line we can parse — otherwise a denied
-        // setprop or a failed binary looks like success.
-        val wrapped = "sh -c '${command.replace("'", "'\\''")}; echo __ADB_EXIT__=$?'"
+        // code (it always closes cleanly). Run the requested command in a
+        // subshell so an inner `exit N` cannot terminate the marker wrapper.
+        // Missing/malformed markers are treated as failure below rather than
+        // silently becoming exit 0.
+        val escaped = command.replace("'", "'\\''")
+        val wrapped = "sh -c '( $escaped ); rc=${'$'}?; echo $SHELL_EXIT_MARKER${'$'}rc'"
         write(A_OPEN, localId, 0, "shell:$wrapped")
         var message = nextMessage(IDLE_TIMEOUT_MS)
         val output = StringBuilder()
@@ -254,15 +256,22 @@ class LocalAdbClient(
         }
         val raw = output.toString()
         // Extract the exit code from the marker line and strip it from output.
-        val markerIdx = raw.lastIndexOf("__ADB_EXIT__=")
-        var exitCode = 0
-        var body = raw
-        if (markerIdx >= 0) {
-            val codeStr = raw.substring(markerIdx + "__ADB_EXIT__=".length)
-                .lineSequence().firstOrNull()?.trim()
-            exitCode = codeStr?.toIntOrNull() ?: 0
-            body = raw.substring(0, markerIdx)
+        // The marker is part of the transport contract: if it is missing or
+        // malformed, the command result is unknown and must never be accepted
+        // as a successful exit 0.
+        val markerIdx = raw.lastIndexOf(SHELL_EXIT_MARKER)
+        if (markerIdx < 0) {
+            Log.w(TAG, "shell: exit marker missing; treating result as failure")
+            return ShellResult(UNKNOWN_SHELL_EXIT_CODE, raw.trim())
         }
+        val codeStr = raw.substring(markerIdx + SHELL_EXIT_MARKER.length)
+            .lineSequence().firstOrNull()?.trim()
+        val exitCode = codeStr?.toIntOrNull()
+        if (exitCode == null) {
+            Log.w(TAG, "shell: malformed exit marker '$codeStr'; treating result as failure")
+            return ShellResult(UNKNOWN_SHELL_EXIT_CODE, raw.trim())
+        }
+        val body = raw.substring(0, markerIdx)
         Log.d(TAG, "shell: done, exit=$exitCode, ${body.length} chars")
         return ShellResult(exitCode, body.trim())
     }
@@ -558,6 +567,8 @@ class LocalAdbClient(
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_TIMEOUT_MS = 120_000
         private const val HEADER_SIZE = 24
+        private const val SHELL_EXIT_MARKER = "__ADB_EXIT__="
+        const val UNKNOWN_SHELL_EXIT_CODE = -1
 
         /** Sentinel pushed by the reader thread when it stops. */
         private val POISON = AdbMessage(0, 0, 0, null)
