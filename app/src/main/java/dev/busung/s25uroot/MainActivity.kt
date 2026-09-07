@@ -1,6 +1,8 @@
 package dev.busung.s25uroot
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -149,6 +151,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.busung.s25uroot.ui.theme.RootMyGalaxyTheme
 import kotlinx.coroutines.delay
@@ -166,6 +169,7 @@ class MainActivity : ComponentActivity() {
     private var themeMode by mutableStateOf(AppThemeMode.System)
     private var advancedMode by mutableStateOf(false)
     private var shizukuMode by mutableStateOf(false)
+    private var autoRootEnabled by mutableStateOf(false)
     private var softRebootAfterRoot by mutableStateOf(false)
     private var czg3BootMinUptimeSeconds by mutableStateOf(DiagnosticUptime.DEFAULT_SECONDS)
 
@@ -177,6 +181,7 @@ class MainActivity : ComponentActivity() {
         themeMode = AppPreferences.themeMode(this)
         advancedMode = AppPreferences.advancedMode(this)
         shizukuMode = AppPreferences.shizukuMode(this)
+        autoRootEnabled = AppPreferences.autoRootEnabled(this)
         softRebootAfterRoot = AppPreferences.softRebootAfterRoot(this)
         czg3BootMinUptimeSeconds = AppPreferences.czg3BootMinUptimeSeconds(this)
         setContent {
@@ -187,6 +192,7 @@ class MainActivity : ComponentActivity() {
                     themeMode = themeMode,
                     advancedMode = advancedMode,
                     shizukuMode = shizukuMode,
+                    autoRootEnabled = autoRootEnabled,
                     softRebootAfterRoot = softRebootAfterRoot,
                     czg3BootMinUptimeSeconds = czg3BootMinUptimeSeconds,
                     onAccentColorChanged = { color ->
@@ -204,6 +210,10 @@ class MainActivity : ComponentActivity() {
                     onShizukuModeChanged = { enabled ->
                         AppPreferences.setShizukuMode(this, enabled)
                         shizukuMode = enabled
+                    },
+                    onAutoRootEnabledChanged = { enabled ->
+                        AppPreferences.setAutoRootEnabled(this, enabled)
+                        autoRootEnabled = enabled
                     },
                     onSoftRebootAfterRootChanged = { enabled ->
                         AppPreferences.setSoftRebootAfterRoot(this, enabled)
@@ -294,12 +304,14 @@ private fun RootApp(
     themeMode: AppThemeMode,
     advancedMode: Boolean,
     shizukuMode: Boolean,
+    autoRootEnabled: Boolean,
     softRebootAfterRoot: Boolean,
     czg3BootMinUptimeSeconds: Int,
     onAccentColorChanged: (AccentColor) -> Unit,
     onThemeModeChanged: (AppThemeMode) -> Unit,
     onAdvancedModeChanged: (Boolean) -> Unit,
     onShizukuModeChanged: (Boolean) -> Unit,
+    onAutoRootEnabledChanged: (Boolean) -> Unit,
     onSoftRebootAfterRootChanged: (Boolean) -> Unit,
     onCzg3BootMinUptimeChanged: (Int) -> Unit,
     openInstaller: (String?) -> Unit,
@@ -522,6 +534,7 @@ private fun RootApp(
                     themeMode = themeMode,
                     advancedMode = advancedMode,
                     shizukuMode = shizukuMode,
+                    autoRootEnabled = autoRootEnabled,
                     softRebootAfterRoot = softRebootAfterRoot,
                     czg3BootMinUptimeSeconds = czg3BootMinUptimeSeconds,
                     updateStatus = updateStatus,
@@ -531,6 +544,7 @@ private fun RootApp(
                     onThemeModeChanged = onThemeModeChanged,
                     onAdvancedModeChanged = onAdvancedModeChanged,
                     onShizukuModeChanged = onShizukuModeChanged,
+                    onAutoRootEnabledChanged = onAutoRootEnabledChanged,
                     onSoftRebootAfterRootChanged = onSoftRebootAfterRootChanged,
                     onCzg3BootMinUptimeChanged = onCzg3BootMinUptimeChanged,
                 )
@@ -1491,6 +1505,7 @@ private fun SettingsPage(
     themeMode: AppThemeMode,
     advancedMode: Boolean,
     shizukuMode: Boolean,
+    autoRootEnabled: Boolean,
     softRebootAfterRoot: Boolean,
     czg3BootMinUptimeSeconds: Int,
     updateStatus: UpdateStatus,
@@ -1500,6 +1515,7 @@ private fun SettingsPage(
     onThemeModeChanged: (AppThemeMode) -> Unit,
     onAdvancedModeChanged: (Boolean) -> Unit,
     onShizukuModeChanged: (Boolean) -> Unit,
+    onAutoRootEnabledChanged: (Boolean) -> Unit,
     onSoftRebootAfterRootChanged: (Boolean) -> Unit,
     onCzg3BootMinUptimeChanged: (Int) -> Unit,
 ) {
@@ -1511,12 +1527,56 @@ private fun SettingsPage(
     var showUptimeDialog by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var showShizukuMissingDialog by remember { mutableStateOf(false) }
+    var showAutoRootNotReadyDialog by remember { mutableStateOf(false) }
     var languageMenuTop by remember { mutableStateOf(32.dp) }
     var colorMenuTop by remember { mutableStateOf(32.dp) }
     var uptimeMenuTop by remember { mutableStateOf(32.dp) }
     val density = LocalDensity.current
     val currentLanguageTag = AppPreferences.languageTag(context)
     val exactCzg3 = remember(device) { isExactCzg3(device) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (!granted && autoRootEnabled) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.autoroot_notification_permission),
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+    val requestAutoRootNotifications: () -> Unit = {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    if (showAutoRootNotReadyDialog) {
+        AlertDialog(
+            onDismissRequest = { showAutoRootNotReadyDialog = false },
+            icon = { Icon(Icons.Rounded.Security, contentDescription = null) },
+            title = {
+                DialogDimAmount(0.34f)
+                Text(stringResource(R.string.autoroot_not_ready_title))
+            },
+            text = { Text(stringResource(R.string.autoroot_not_ready_body)) },
+            confirmButton = {
+                FilledTonalButton(onClick = {
+                    clickHaptic(view)
+                    showAutoRootNotReadyDialog = false
+                    requestAutoRootNotifications()
+                }) {
+                    Text(stringResource(R.string.autoroot_not_ready_acknowledge))
+                }
+            },
+        )
+    }
 
     if (showShizukuMissingDialog) {
         AlertDialog(
@@ -1698,11 +1758,28 @@ private fun SettingsPage(
                     )
                 }
                 SettingsSwitchCard(
+                    icon = Icons.Rounded.Security,
+                    title = stringResource(R.string.autoroot_opt_in_title),
+                    description = stringResource(R.string.autoroot_opt_in_description),
+                    checked = autoRootEnabled,
+                    position = if (exactCzg3) SettingsCardPosition.Middle else SettingsCardPosition.Top,
+                    onCheckedChange = { enabled ->
+                        onAutoRootEnabledChanged(enabled)
+                        if (enabled) {
+                            if (AutoRootSupport.hasVerifiedInstall(context)) {
+                                requestAutoRootNotifications()
+                            } else {
+                                showAutoRootNotReadyDialog = true
+                            }
+                        }
+                    },
+                )
+                SettingsSwitchCard(
                     icon = Icons.Rounded.SystemUpdate,
                     title = stringResource(R.string.soft_reboot_title),
                     description = stringResource(R.string.soft_reboot_description),
                     checked = softRebootAfterRoot,
-                    position = if (exactCzg3) SettingsCardPosition.Bottom else SettingsCardPosition.GroupedSingle,
+                    position = SettingsCardPosition.Bottom,
                     onCheckedChange = {
                         clickHaptic(view)
                         onSoftRebootAfterRootChanged(it)

@@ -22,5 +22,8 @@
     <string name="autoroot_boot_timeout">O Android não confirmou a conclusão do boot dentro do intervalo permitido.</string>
     <string name="autoroot_boot_changed">O identificador do boot do kernel mudou enquanto o Auto Root aguardava.</string>
     <string name="autoroot_already_attempted">O Auto Root já tentou executar neste boot. Não haverá nova tentativa automática.</string>
-    <string name="autoroot_notification_permission">A permissão de notificações é necessária antes de ativar o Auto Root.</string>
+    <string name="autoroot_notification_permission">O Auto Root continua ativado, mas as notificações de progresso podem ficar ocultas até você conceder a permissão de notificações.</string>
+    <string name="autoroot_not_ready_title">Auto Root armado</string>
+    <string name="autoroot_not_ready_body">O Auto Root está ativado, mas só funcionará depois que uma execução Manual Online terminar com sucesso e salvar um cache de payload verificado.</string>
+    <string name="autoroot_not_ready_acknowledge" translatable="false">OK</string>
 </resources>
