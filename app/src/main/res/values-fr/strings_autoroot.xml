@@ -23,4 +23,6 @@
     <string name="autoroot_boot_changed">L’identifiant de démarrage du noyau a changé pendant l’attente d’Auto Root.</string>
     <string name="autoroot_already_attempted">Auto Root a déjà effectué une tentative pendant ce démarrage. Aucune nouvelle tentative automatique ne sera effectuée.</string>
     <string name="autoroot_notification_permission">L’autorisation des notifications est requise avant d’activer Auto Root.</string>
+    <string name="autoroot_not_ready_title">Auto Root armé</string>
+    <string name="autoroot_not_ready_body">Auto Root est activé, mais il ne fonctionnera qu’après une exécution Manual Online réussie ayant enregistré un cache de payload vérifié.</string>
 </resources>

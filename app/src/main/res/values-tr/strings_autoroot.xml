@@ -23,4 +23,6 @@
     <string name="autoroot_boot_changed">Auto Root beklerken çekirdek açılış kimliği değişti.</string>
     <string name="autoroot_already_attempted">Auto Root bu açılışta zaten denendi. Otomatik yeniden deneme yapılmayacak.</string>
     <string name="autoroot_notification_permission">Auto Root etkinleştirilmeden önce bildirim izni gereklidir.</string>
+    <string name="autoroot_not_ready_title">Auto Root hazır</string>
+    <string name="autoroot_not_ready_body">Auto Root etkin, ancak Manual Online bir kez başarıyla tamamlanıp doğrulanmış payload önbelleğini kaydedene kadar çalışmaz.</string>
 </resources>

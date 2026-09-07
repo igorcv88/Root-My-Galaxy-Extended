@@ -23,4 +23,6 @@
     <string name="autoroot_boot_changed">Auto Root 等待期間核心開機識別碼已變更。</string>
     <string name="autoroot_already_attempted">Auto Root 在本次開機中已經嘗試過。不會自動重試。</string>
     <string name="autoroot_notification_permission">啟用 Auto Root 前必須授予通知權限。</string>
+    <string name="autoroot_not_ready_title">Auto Root 已就緒</string>
+    <string name="autoroot_not_ready_body">Auto Root 已啟用，但在 Manual Online 至少成功完成一次並儲存經過驗證的 payload 快取之前不會執行。</string>
 </resources>

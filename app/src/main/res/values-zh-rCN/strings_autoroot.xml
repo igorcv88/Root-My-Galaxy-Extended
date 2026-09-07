@@ -23,4 +23,6 @@
     <string name="autoroot_boot_changed">Auto Root 等待期间内核启动标识已更改。</string>
     <string name="autoroot_already_attempted">Auto Root 在本次启动中已经尝试过。不会自动重试。</string>
     <string name="autoroot_notification_permission">启用 Auto Root 前必须授予通知权限。</string>
+    <string name="autoroot_not_ready_title">Auto Root 已就绪</string>
+    <string name="autoroot_not_ready_body">Auto Root 已启用，但在 Manual Online 至少成功完成一次并保存经过验证的 payload 缓存之前不会运行。</string>
 </resources>

@@ -23,4 +23,6 @@
     <string name="autoroot_boot_changed">Auto Root の待機中にカーネルの起動識別子が変更されました。</string>
     <string name="autoroot_already_attempted">この起動では Auto Root をすでに試行済みです。自動再試行は行いません。</string>
     <string name="autoroot_notification_permission">Auto Root を有効にする前に通知権限が必要です。</string>
+    <string name="autoroot_not_ready_title">Auto Root は準備完了</string>
+    <string name="autoroot_not_ready_body">Auto Root は有効ですが、Manual Online が一度正常に完了して検証済みペイロードキャッシュが保存されるまで実行されません。</string>
 </resources>
