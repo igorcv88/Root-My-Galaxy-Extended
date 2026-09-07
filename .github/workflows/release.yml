@@ -208,6 +208,31 @@ jobs:
             -PreleaseVersionCode="$VERSION_CODE" \
             -PreleaseVersionName="$VERSION_NAME"
 
+          # The helper is an executable ELF placed under jniLibs only so Android
+          # extracts it into nativeLibraryDir. Its exact feed hash is part of the
+          # runtime contract, so verify the bytes *after* AGP packaging/stripping.
+          python3 - <<'PY'
+          import hashlib
+          import os
+          import zipfile
+
+          apk = "app/build/outputs/apk/release/app-release-unsigned.apk"
+          member = "lib/arm64-v8a/libcve43499root.so"
+          expected = os.environ["ROOT_HELPER_SHA256"].lower()
+          with zipfile.ZipFile(apk) as archive:
+              try:
+                  data = archive.read(member)
+              except KeyError as error:
+                  raise SystemExit(f"Packaged root helper is missing: {member}") from error
+          actual = hashlib.sha256(data).hexdigest()
+          if actual != expected:
+              raise SystemExit(
+                  "Packaged root helper SHA-256 drifted during Android build: "
+                  f"expected={expected} actual={actual} size={len(data)}"
+              )
+          print(f"Packaged root helper verified byte-for-byte: {actual} size={len(data)}")
+          PY
+
       - name: Preparar chave de assinatura
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}

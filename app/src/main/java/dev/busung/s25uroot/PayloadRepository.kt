@@ -89,14 +89,19 @@ class PayloadRepository(private val context: Context) {
         val expected = profile.rootHelper ?: return
         val helper = File(context.applicationInfo.nativeLibraryDir, ROOT_HELPER_LIBRARY)
         require(helper.isFile) {
-            "The required root helper is not bundled in this app build"
+            "The required root helper is not bundled in Root My Galaxy ${BuildConfig.VERSION_NAME}"
         }
-        require(helper.length() == expected.size) {
-            "This app contains an outdated root helper; update Root My Galaxy before running this payload"
+
+        val actualSize = helper.length()
+        require(actualSize == expected.size) {
+            "Bundled root helper size mismatch in Root My Galaxy ${BuildConfig.VERSION_NAME}: " +
+                "expected=${expected.size} actual=$actualSize. Update/rebuild the app before running this payload."
         }
-        val actual = sha256(helper)
-        require(actual == expected.sha256) {
-            "This app contains an outdated root helper; update Root My Galaxy before running this payload"
+
+        val actualSha256 = sha256(helper)
+        require(actualSha256 == expected.sha256) {
+            "Bundled root helper SHA-256 mismatch in Root My Galaxy ${BuildConfig.VERSION_NAME}: " +
+                "expected=${expected.sha256} actual=$actualSha256. Update/rebuild the app before running this payload."
         }
     }
 
