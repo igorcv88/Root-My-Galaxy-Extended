@@ -8,6 +8,7 @@ import java.io.OutputStream
 import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import moe.shizuku.server.IRemoteProcess
 import moe.shizuku.server.IShizukuService
 import rikka.shizuku.Shizuku
@@ -22,6 +23,30 @@ object ShizukuController {
         Shizuku.pingBinder()
     } catch (_: Throwable) {
         false
+    }
+
+    /**
+     * Event-driven Binder wait used by boot coordination. It does not poll while
+     * the phone is sitting at boot waiting for another Shizuku starter to win.
+     */
+    suspend fun awaitRunning(timeoutMillis: Long): Boolean {
+        if (isRunning()) return true
+        val received = withTimeoutOrNull(timeoutMillis) {
+            suspendCancellableCoroutine<Boolean> { continuation ->
+                lateinit var listener: Shizuku.OnBinderReceivedListener
+                listener = Shizuku.OnBinderReceivedListener {
+                    if (continuation.isActive) {
+                        Shizuku.removeBinderReceivedListener(listener)
+                        continuation.resume(true)
+                    }
+                }
+                continuation.invokeOnCancellation {
+                    Shizuku.removeBinderReceivedListener(listener)
+                }
+                Shizuku.addBinderReceivedListenerSticky(listener)
+            }
+        }
+        return received == true || isRunning()
     }
 
     /**
@@ -107,13 +132,6 @@ object ShizukuController {
 
     fun writeFile(remotePath: String, mode: String, source: InputStream) {
         require(FILE_MODE_PATTERN.matches(mode)) { "Invalid file mode: $mode" }
-
-        // Never truncate the final path directly. A previous standalone/root run can
-        // leave it owned by root and non-writable by Shizuku's shell UID. Upload into
-        // a shell-owned temporary path first, then publish it in a separate command
-        // only after the Binder stream and remote `cat` have both completed cleanly.
-        // Keeping upload and publication separate also guarantees that a partial read
-        // or EPIPE cannot turn a normal EOF in `cat` into a truncated final payload.
         val tempPath = "$remotePath.shizuku-${UUID.randomUUID()}.tmp"
         val quotedPath = shellQuote(remotePath)
         val quotedTemp = shellQuote(tempPath)
