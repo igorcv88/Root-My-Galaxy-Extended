@@ -19,9 +19,9 @@ private data class AutoRootCommandResult(val code: Int, val output: String)
 
 /**
  * Auto Root executes the last-known-good payload in a fresh standalone process.
- * The payload spawn mirrors the working Manual standalone path for timeout
- * variables and the per-boot P0 offset hint, while keeping persistence outside
- * the active race window.
+ * KernelSU is expected to auto-late-load from the UMH root helper as soon as
+ * bootstrap root lands. The historical client stage/--late-load path remains a
+ * fallback when the persisted /data/local/tmp ksud is unavailable.
  */
 internal class AutoRootRunner(
     private val context: Context,
@@ -40,19 +40,46 @@ internal class AutoRootRunner(
         executeExploit(payloads.exploit, bootToken)
 
         onStage(AutoRootStage.LoadingKernelSu)
-        stageKernelSu(payloads)
-
-        if (AppPreferences.softRebootAfterRoot(context)) {
-            KernelSuSoftReboot.arm(context, helperFile(), false)
+        val autoLoaded = waitForAutoLateLoad()
+        if (autoLoaded) {
+            onLog("[+] KernelSU auto-late-load verified; no client handoff required")
+        } else {
+            onLog("[!] KernelSU auto-late-load not ready; using client fallback")
+            stageKernelSu(payloads)
+            val lateLoad = runHelper("--late-load")
+            require(lateLoad.code == 0) {
+                context.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
+            }
+            if (lateLoad.output.isNotBlank()) onLog(lateLoad.output)
         }
 
         onStage(AutoRootStage.VerifyingRoot)
-        val lateLoad = runHelper("--late-load")
-        require(lateLoad.code == 0) {
-            context.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
+        val verification = runHelper("--ksu-info")
+        require(verification.code == 0) {
+            context.getString(R.string.error_ksu_verify, verification.code, verification.output)
         }
-        if (lateLoad.output.isNotBlank()) onLog(lateLoad.output)
+        if (verification.output.isNotBlank()) onLog(verification.output)
         onLog(context.getString(R.string.log_ksu_control_verified))
+    }
+
+    private suspend fun waitForAutoLateLoad(): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + AUTO_LATE_LOAD_WAIT_MILLIS
+        var lastOutput = ""
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val probe = runCatching { runHelper("--ksu-info") }.getOrNull()
+            if (probe != null) {
+                lastOutput = probe.output
+                if (probe.code == 0) {
+                    if (probe.output.isNotBlank()) onLog(probe.output)
+                    return true
+                }
+            }
+            delay(AUTO_LATE_LOAD_POLL_INTERVAL)
+        }
+        if (lastOutput.isNotBlank()) {
+            onLog("[*] auto-late-load probe: ${lastOutput.takeLast(240)}")
+        }
+        return false
     }
 
     private suspend fun executeExploit(payload: File, bootToken: String) {
@@ -86,9 +113,7 @@ internal class AutoRootRunner(
                 val lowered = runCatching {
                     Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
                 }.isSuccess
-                if (!lowered) {
-                    runCatching { Process.setThreadPriority(originalThreadPriority) }
-                }
+                if (!lowered) runCatching { Process.setThreadPriority(originalThreadPriority) }
             }
         } catch (error: Throwable) {
             runCatching { Process.setThreadPriority(originalThreadPriority) }
@@ -125,9 +150,6 @@ internal class AutoRootRunner(
             val exitCode = process.waitFor()
             val rawLog = readLog()
             publishExploitLog(rawLog)
-
-            // Persist a newly discovered P0 offset only after the payload process
-            // has fully exited. No SharedPreferences I/O is added to the race.
             cacheP0Offset(bootToken, rawLog)
 
             val earlyOutput = captured.toString().trim()
@@ -250,6 +272,7 @@ internal class AutoRootRunner(
         private const val EXPLOIT_STALL_MILLIS = 90_000L
         private const val EXPLOIT_TOTAL_MILLIS = 900_000L
         private const val HELPER_TIMEOUT_MILLIS = 120_000L
+        private const val AUTO_LATE_LOAD_WAIT_MILLIS = 8_000L
         private const val P0_CACHE = "p0_cache"
         private const val P0_CACHE_BOOT_TOKEN = "kernel_boot_id"
         private const val P0_CACHE_OFFSET = "offset"
@@ -260,6 +283,7 @@ internal class AutoRootRunner(
         private const val KSUD_STAGE_PATH = "/data/local/tmp/.ksud-stage"
         private val LOG_POLL_INTERVAL = 250.milliseconds
         private val HELPER_POLL_INTERVAL = 250.milliseconds
+        private val AUTO_LATE_LOAD_POLL_INTERVAL = 400.milliseconds
         private val ANSI_ESCAPE = Regex("\u001B\\[[0-?]*[ -/]*[@-~]")
         private val P0_OFFSET_PATTERN = Regex(
             "slide-kaslr-ok[^\\n]*slide=([0-9a-fA-F]{16})",
