@@ -22,7 +22,7 @@
     <string name="autoroot_boot_timeout">Android не сообщил о завершении загрузки за отведённое время.</string>
     <string name="autoroot_boot_changed">Идентификатор загрузки ядра изменился во время ожидания Auto Root.</string>
     <string name="autoroot_already_attempted">Auto Root уже выполнял попытку в этой загрузке. Автоматического повтора не будет.</string>
-    <string name="autoroot_notification_permission">Перед включением Auto Root необходимо разрешение на уведомления.</string>
+    <string name="autoroot_notification_permission">Auto Root останется включённым, но уведомления о ходе выполнения могут быть скрыты, пока не предоставлено разрешение на уведомления.</string>
     <string name="autoroot_not_ready_title">Auto Root готов</string>
     <string name="autoroot_not_ready_body">Auto Root включён, но не запустится, пока Manual Online хотя бы один раз не завершится успешно и не сохранит проверенный кэш payload.</string>
 </resources>

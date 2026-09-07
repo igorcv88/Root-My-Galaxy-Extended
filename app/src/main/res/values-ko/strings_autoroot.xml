@@ -22,7 +22,7 @@
     <string name="autoroot_boot_timeout">허용된 시간 내에 Android가 부팅 완료를 보고하지 않았습니다.</string>
     <string name="autoroot_boot_changed">Auto Root 대기 중 커널 부팅 식별자가 변경되었습니다.</string>
     <string name="autoroot_already_attempted">이번 부팅에서는 Auto Root가 이미 시도되었습니다. 자동 재시도는 수행되지 않습니다.</string>
-    <string name="autoroot_notification_permission">Auto Root를 활성화하려면 먼저 알림 권한이 필요합니다.</string>
+    <string name="autoroot_notification_permission">Auto Root는 계속 활성화되지만 알림 권한을 허용할 때까지 진행 알림이 표시되지 않을 수 있습니다.</string>
     <string name="autoroot_not_ready_title">Auto Root 준비됨</string>
     <string name="autoroot_not_ready_body">Auto Root는 활성화되어 있지만 Manual Online이 한 번 성공하여 검증된 페이로드 캐시를 저장할 때까지 실행되지 않습니다.</string>
 </resources>

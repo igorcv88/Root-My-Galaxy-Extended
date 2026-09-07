@@ -22,7 +22,7 @@
     <string name="autoroot_boot_timeout">Android không báo hoàn tất khởi động trong thời gian cho phép.</string>
     <string name="autoroot_boot_changed">Mã định danh lần khởi động của kernel đã thay đổi khi Auto Root đang chờ.</string>
     <string name="autoroot_already_attempted">Auto Root đã thử trong lần khởi động này. Sẽ không tự động thử lại.</string>
-    <string name="autoroot_notification_permission">Cần cấp quyền thông báo trước khi có thể bật Auto Root.</string>
+    <string name="autoroot_notification_permission">Auto Root vẫn được bật, nhưng thông báo tiến trình có thể bị ẩn cho đến khi quyền thông báo được cấp.</string>
     <string name="autoroot_not_ready_title">Auto Root đã sẵn sàng</string>
     <string name="autoroot_not_ready_body">Auto Root đã được bật nhưng sẽ chưa chạy cho đến khi Manual Online hoàn tất thành công một lần và lưu bộ nhớ đệm payload đã được xác minh.</string>
 </resources>

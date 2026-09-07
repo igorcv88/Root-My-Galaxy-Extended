@@ -22,7 +22,7 @@
     <string name="autoroot_boot_timeout">Android ruxsat etilgan vaqt ichida yuklanish tugaganini bildirmadi.</string>
     <string name="autoroot_boot_changed">Auto Root kutayotgan paytda yadro yuklanish identifikatori o‘zgardi.</string>
     <string name="autoroot_already_attempted">Auto Root ushbu yuklanishda allaqachon urinib ko‘rdi. Avtomatik qayta urinish bajarilmaydi.</string>
-    <string name="autoroot_notification_permission">Auto Root’ni yoqishdan oldin bildirishnoma ruxsati talab qilinadi.</string>
+    <string name="autoroot_notification_permission">Auto Root yoqilgan holda qoladi, ammo bildirishnoma ruxsati berilmaguncha jarayon bildirishnomalari ko‘rinmasligi mumkin.</string>
     <string name="autoroot_not_ready_title">Auto Root tayyor</string>
     <string name="autoroot_not_ready_body">Auto Root yoqilgan, lekin Manual Online bir marta muvaffaqiyatli yakunlanib, tekshirilgan payload keshini saqlamaguncha ishlamaydi.</string>
 </resources>
