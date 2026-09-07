@@ -75,9 +75,16 @@ internal object AutoRootSupport {
             .commit()
     }
 
-    /** Auto Root is deliberately network-free and always consumes known-good cache. */
-    fun loadVerifiedLocalPayloads(context: Context): VerifiedPayloads =
-        KnownGoodPayloadStore.load(context)
+    /**
+     * Auto Root is deliberately network-free and always consumes known-good cache.
+     * Prepare the verified ksud handoff only here, after the gate has completed its
+     * ordinary validation and before the fresh exploit process is launched.
+     */
+    fun loadVerifiedLocalPayloads(context: Context): VerifiedPayloads {
+        val payloads = KnownGoodPayloadStore.load(context)
+        KernelSuBootstrapStore.prepare(context, payloads)
+        return payloads
+    }
 }
 
 internal fun shouldRunForBoot(currentBootToken: String, verifiedBootToken: String?): Boolean {
