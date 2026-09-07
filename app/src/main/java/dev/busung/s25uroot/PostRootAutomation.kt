@@ -19,10 +19,11 @@ internal data class PostRootResult(
  * exploit path: callers invoke it only after KernelSU has been verified.
  *
  * An already-running Shizuku Binder is the preferred post-root shell bridge.
- * Wireless ADB exists only as a compatibility fallback when no Binder is
- * available; Shizuku itself is never restarted through ADB when it is already
- * alive. Module activation/zygote refresh remains owned by one detached root
- * keeper and the app never replays KernelSU lifecycle stages.
+ * When the Binder is absent, the app-authenticated v0266 root-helper daemon is
+ * tried next so the thedjchi/Shizuku root starter does not depend on Wireless
+ * ADB. Local ADB remains compatibility-only fallback. Module activation/zygote
+ * refresh remains owned by one detached root keeper and the app never replays
+ * KernelSU lifecycle stages.
  */
 internal object PostRootAutomation {
     suspend fun run(
@@ -51,11 +52,58 @@ internal object PostRootAutomation {
             }
 
             // A Binder can theoretically be alive in a context that cannot use
-            // KernelSU --allow-shell. Keep local ADB only as a fallback bridge
-            // rather than turning that unusual state into a false success.
-            onLog("[!] Shizuku Binder is alive but cannot obtain KernelSU shell root; trying local ADB fallback")
+            // KernelSU --allow-shell. The app-authenticated helper is the next
+            // bridge; local ADB remains last-resort compatibility only.
+            onLog("[!] Shizuku Binder is alive but cannot obtain KernelSU shell root; trying app root helper")
         }
 
+        val helperRoot = rootShellFromAppHelper(context, onLog)
+        if (helperRoot != null) {
+            grantWriteSecureSettingsIfNeeded(context, helperRoot, onLog)
+
+            var shizukuStarted = ShizukuController.pingUntilRunning(500)
+            if (startShizuku && !shizukuStarted) {
+                val start = startShizukuWithRoot(context, helperRoot)
+                if (start.exitCode != 0) {
+                    val detail = start.output.trim().ifBlank {
+                        "root-mode Shizuku starter exit ${start.exitCode}"
+                    }
+                    onLog("[-] ${context.getString(R.string.postroot_shizuku_failed, detail.takeLast(180))}")
+                    if (!softReboot) {
+                        return@withContext PostRootResult(detail = detail)
+                    }
+                } else {
+                    val output = start.output.trim()
+                    if (output.isNotBlank()) onLog("[*] $output")
+                    shizukuStarted = ShizukuController.pingUntilRunning(SHIZUKU_BINDER_TIMEOUT_MILLIS)
+                    if (shizukuStarted) {
+                        onLog("[+] Shizuku root-mode starter completed through RMG root helper; Binder is available")
+                    } else {
+                        onLog("[!] Shizuku root-mode starter returned successfully but Binder did not appear")
+                    }
+                }
+            } else if (shizukuStarted) {
+                onLog("[+] Shizuku Binder became available before helper startup; no restart needed")
+            }
+
+            // Once the Binder is live, prefer it for subsequent post-root work.
+            // If it is not usable as a root bridge, keep the app-authenticated
+            // helper rather than opening Wireless ADB.
+            val preferredRoot = if (shizukuStarted) {
+                rootShellFromShizuku(onLog) ?: helperRoot
+            } else {
+                helperRoot
+            }
+            return@withContext finishPostRoot(
+                context = context,
+                rootShell = preferredRoot,
+                softReboot = softReboot,
+                shizukuStarted = shizukuStarted,
+                onLog = onLog,
+            )
+        }
+
+        onLog("[!] App-authenticated root helper unavailable; trying local ADB fallback")
         val session = openLocalAdbFallback(context, onLog)
             ?: return@withContext PostRootResult(
                 shizukuStarted = ShizukuController.isRunning(),
@@ -116,8 +164,8 @@ internal object PostRootAutomation {
         onLog: (String) -> Unit,
     ): WirelessAdbSession? {
         if (!AppPreferences.adbPaired(context)) {
-            // Local ADB is now fallback-only. Pairing is requested only when no
-            // usable Shizuku Binder/root shell exists.
+            // Local ADB is fallback-only. Pairing is requested only when no
+            // usable Shizuku Binder or app-authenticated root helper exists.
             if (Application.getProcessName() == context.packageName) {
                 runCatching {
                     context.startActivity(
@@ -171,6 +219,22 @@ internal object PostRootAutomation {
             return { command ->
                 ShizukuController.shell("su -c ${shellQuote(command)}")
             }
+        }
+        return null
+    }
+
+    private fun rootShellFromAppHelper(
+        context: Context,
+        onLog: (String) -> Unit,
+    ): ((String) -> LocalAdbClient.ShellResult)? {
+        val rootCheck = RootHelperShell.shell(context, "id")
+        if (rootCheck.exitCode == 0 && rootCheck.output.contains("uid=0")) {
+            onLog("[+] RMG app-authenticated root helper verified; Wireless ADB is not required")
+            return { command -> RootHelperShell.shell(context, command) }
+        }
+        val detail = rootCheck.output.trim().takeLast(180)
+        if (detail.isNotBlank()) {
+            onLog("[!] RMG root helper unavailable for post-root commands: $detail")
         }
         return null
     }
