@@ -9,19 +9,14 @@ internal data class ModuleKeeperLaunchResult(
 /**
  * Single post-root module-refresh owner.
  *
- * The Android app only stages and launches this detached root-side keeper after
- * KernelSU has already been verified. The keeper deliberately does NOT replay
- * KernelSU post-fs-data/services/boot-completed: v0266 late-load already owns the
- * module lifecycle. Its only job is to wait until that state is usable, perform
- * one guarded zygote respawn so Zygisk/LSPosed can inject, and publish a marker
- * keyed to the current kernel boot id.
- *
- * Keeping the choreography in one detached root shell means the app, Auto Root
- * gate and :autoroot_exec process may all disappear during the zygote respawn
- * without creating a second owner or a second restart.
+ * The app never replays KernelSU post-fs-data/services/boot-completed. v0266
+ * late-load already owns module activation; this keeper only waits for that
+ * state to become usable, performs one guarded zygote respawn, and publishes a
+ * boot-id keyed completion marker.
  */
 internal object PostRootModuleKeeper {
     const val DONE_MARKER = "/data/local/tmp/.cve43499-modules-done"
+    const val START_MARKER = "/data/local/tmp/.cve43499-modules-keeper-started"
     const val OWNER_LOG = "/data/local/tmp/rmg-postroot-keeper.log"
     private const val KEEPER_PATH = "/data/local/tmp/rmg-postroot-keeper.sh"
 
@@ -29,18 +24,36 @@ internal object PostRootModuleKeeper {
         adb: WirelessAdbSession,
         expectedBootId: String,
         onLog: (String) -> Unit = {},
+    ): ModuleKeeperLaunchResult = launch(
+        rootShell = { command ->
+            adb.shell("su -c ${shellQuote(command)} 2>&1")
+        },
+        expectedBootId = expectedBootId,
+        onLog = onLog,
+    )
+
+    /**
+     * Launch through any already-available root command transport. This lets an
+     * already-running Shizuku Binder be the preferred post-root bridge while
+     * retaining local ADB as a compatibility fallback.
+     */
+    fun launch(
+        rootShell: (String) -> LocalAdbClient.ShellResult,
+        expectedBootId: String,
+        onLog: (String) -> Unit = {},
     ): ModuleKeeperLaunchResult {
         if (expectedBootId.isBlank()) {
             return ModuleKeeperLaunchResult(false, detail = "kernel boot id unavailable")
         }
 
-        val existing = adb.shell("cat '$DONE_MARKER' 2>/dev/null").output.trim()
+        val existing = rootShell("cat '$DONE_MARKER' 2>/dev/null").output.trim()
         if (markerMatchesBoot(existing, expectedBootId)) {
             onLog("[+] Module/zygote refresh already completed for this kernel boot")
             return ModuleKeeperLaunchResult(accepted = true, alreadyDone = true)
         }
 
         val script = buildKeeperScript(expectedBootId)
+        val expectedQuoted = shellQuote(expectedBootId)
         val installAndLaunch = buildString {
             append("set -e\n")
             append("tmp='$KEEPER_PATH.tmp.$$'\n")
@@ -50,17 +63,25 @@ internal object PostRootModuleKeeper {
             append("RMG_KEEPER_EOF\n")
             append("chmod 700 \"\$tmp\"\n")
             append("mv -f \"\$tmp\" '$KEEPER_PATH'\n")
+            append("rm -f '$START_MARKER'\n")
+            append(": > '$OWNER_LOG'\n")
+            append("chmod 0666 '$OWNER_LOG'\n")
             append("setsid sh '$KEEPER_PATH' >>'$OWNER_LOG' 2>&1 < /dev/null &\n")
-            append("echo rmg-keeper-started\n")
+            // A successful fork is not enough: require the detached keeper
+            // itself to prove that it reached its first executable action.
+            append("i=0; while [ \"\$i\" -lt 30 ]; do ")
+            append("[ \"\$(cat '$START_MARKER' 2>/dev/null)\" = $expectedQuoted ] && { echo rmg-keeper-started; exit 0; }; ")
+            append("i=\$((i+1)); sleep 0.1; done\n")
+            append("echo 'keeper did not publish start marker' >&2; exit 78\n")
         }
 
-        val result = adb.shell("su -c ${shellQuote(installAndLaunch)} 2>&1")
+        val result = rootShell(installAndLaunch)
         if (result.exitCode != 0 || !result.output.contains("rmg-keeper-started")) {
             val detail = result.output.trim().ifBlank { "keeper launcher exit ${result.exitCode}" }
             return ModuleKeeperLaunchResult(false, detail = detail.takeLast(240))
         }
 
-        onLog("[+] Single-owner module keeper launched; app will not replay KernelSU lifecycle")
+        onLog("[+] Single-owner module keeper confirmed running; app will not replay KernelSU lifecycle")
         onLog("[*] Keeper log: $OWNER_LOG")
         return ModuleKeeperLaunchResult(accepted = true)
     }
@@ -75,12 +96,12 @@ internal object PostRootModuleKeeper {
     internal fun buildKeeperScript(expectedBootId: String): String = """
         #!/system/bin/sh
         # Root My Galaxy post-root keeper.
-        # Single owner: no ksud post-fs-data/services/boot-completed replay here.
+        # Single owner: no KernelSU lifecycle replay here.
 
         EXPECTED_BOOT=${shellQuote(expectedBootId)}
         DONE='$DONE_MARKER'
+        STARTED='$START_MARKER'
         LOCK='/data/local/tmp/.cve43499-modules-owner'
-        LOG='$OWNER_LOG'
         OVERLAY_META='/data/adb/modules/meta-overlayfsx'
         OVERLAY_HOME='/data/adb/metamodule'
         VIPER_META='/data/adb/modules/ViPER4Android-RE-AIDL'
@@ -102,6 +123,13 @@ internal object PostRootModuleKeeper {
             echo "${'$'}(pidof zygote64 2>/dev/null) ${'$'}(pidof zygote 2>/dev/null)" |
                 sed 's/^ *//; s/  */ /g; s/ *${'$'}//'
         }
+
+        # First executable action visible to the launcher. If this marker never
+        # appears, the app must not claim that a detached keeper is running.
+        printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}STARTED" || exit 59
+        chown 2000:2000 "${'$'}STARTED" 2>/dev/null
+        chmod 0664 "${'$'}STARTED" 2>/dev/null
+        log "keeper process started boot_id=${'$'}EXPECTED_BOOT pid=${'$'}${'$'}"
 
         BOOT="${'$'}(current_boot)"
         if [ -z "${'$'}BOOT" ] || [ "${'$'}BOOT" != "${'$'}EXPECTED_BOOT" ]; then
@@ -132,7 +160,6 @@ internal object PostRootModuleKeeper {
             exit 62
         fi
 
-        # Do not touch zygote while Android is still settling after the real boot.
         i=0
         while [ "${'$'}i" -lt 90 ]; do
             [ "${'$'}(getprop sys.boot_completed 2>/dev/null)" = "1" ] && break
@@ -144,8 +171,8 @@ internal object PostRootModuleKeeper {
             exit 63
         fi
 
-        # KernelSU must already have completed v0266 late-load. We intentionally
-        # do not invoke any lifecycle stage here.
+        # KernelSU late-load already owns module activation. Merely require its
+        # executable state to exist; never invoke lifecycle stages here.
         KSUD=''
         for p in /data/adb/ksud /data/adb/ksu/bin/ksud /data/local/tmp/ksud-s25u-kdp; do
             if [ -x "${'$'}p" ]; then KSUD="${'$'}p"; break; fi
@@ -156,10 +183,9 @@ internal object PostRootModuleKeeper {
         fi
         log "KernelSU late-load state accepted via ${'$'}KSUD"
 
-        # Meta-Overlayfsx-ViPER-safe readiness. Its post-fs-data only clears the
-        # log; metamount.sh performs the ext4/OverlayFSx mounts and the special
-        # ViPER granular bind mounts. Wait for those mounts instead of replaying
-        # post-fs-data or metamount.
+        # Meta-Overlayfsx-ViPER-safe readiness. metamount.sh owns the ext4/
+        # OverlayFSx mounts and ViPER granular bind mounts; wait for that state
+        # instead of replaying post-fs-data, metamount, service, or boot-completed.
         if [ -d "${'$'}OVERLAY_META" ] && [ ! -f "${'$'}OVERLAY_META/disable" ]; then
             mounted=0
             i=0
@@ -181,7 +207,7 @@ internal object PostRootModuleKeeper {
                 i=0
                 while [ "${'$'}i" -lt 10 ]; do
                     if "${'$'}OVERLAY_HOME/overlayfsx" inspect -r 2>/dev/null |
-                        grep -F '"status": "success"' >/dev/null 2>&1; then
+                        grep -F '\"status\": \"success\"' >/dev/null 2>&1; then
                         inspect_ok=1
                         break
                     fi
@@ -221,7 +247,6 @@ internal object PostRootModuleKeeper {
             fi
         fi
 
-        # Require the existing zygote set to remain stable for three samples.
         OLD="${'$'}(zygote_pids)"
         if [ -z "${'$'}OLD" ]; then
             log "no zygote process found"
@@ -248,8 +273,6 @@ internal object PostRootModuleKeeper {
         fi
         OLD="${'$'}last"
 
-        # Re-check the boot identity and idempotence immediately before the only
-        # destructive action in this keeper.
         if [ "${'$'}(current_boot)" != "${'$'}EXPECTED_BOOT" ]; then
             log "kernel reboot detected before zygote restart; aborting"
             exit 71
@@ -285,8 +308,6 @@ internal object PostRootModuleKeeper {
             exit 73
         fi
 
-        # The kernel must still be the same one; this distinguishes the intended
-        # zygote/userspace refresh from a real reboot or crash recovery.
         if [ "${'$'}(current_boot)" != "${'$'}EXPECTED_BOOT" ]; then
             log "kernel boot id changed during zygote restart; no done marker"
             exit 74
