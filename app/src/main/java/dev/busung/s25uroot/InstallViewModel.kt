@@ -40,7 +40,6 @@ data class InstallUiState(
             InstallPhase.Exploiting,
             InstallPhase.LoadingKernelSu,
         )
-
 }
 
 data class TargetCatalogUiState(
@@ -215,17 +214,48 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
 
                 setPhase(InstallPhase.Installed, app.getString(R.string.status_ksu_active))
                 appendLog(app.getString(R.string.log_install_complete))
-                finishHistory(InstallRunResult.Succeeded)
 
-                if (AppPreferences.softRebootAfterRoot(app)) {
-                    mutableState.value = mutableState.value.copy(message = app.getString(R.string.soft_reboot_starting))
-                    val reboot = KernelSuSoftReboot.request(app)
-                    if (!reboot.started) {
-                        val message = app.getString(R.string.soft_reboot_failed, reboot.detail.take(160))
-                        mutableState.value = mutableState.value.copy(message = message)
-                        appendLog("[-] $message")
+                // Persist a successful root result before any userspace restart.
+                // Keep the history entry active so post-root logs can still be
+                // appended if the process survives the zygote restart.
+                checkpointHistorySuccess()
+
+                val softReboot = AppPreferences.softRebootAfterRoot(app)
+                val startShizuku = AppPreferences.autoStartShizukuAfterRoot(app)
+                if (softReboot || startShizuku) {
+                    if (softReboot) {
+                        mutableState.value = mutableState.value.copy(
+                            message = app.getString(R.string.soft_reboot_starting),
+                        )
+                    }
+                    try {
+                        val postRoot = PostRootAutomation.run(
+                            context = app,
+                            softReboot = softReboot,
+                            startShizuku = startShizuku,
+                            onLog = ::appendLog,
+                        )
+                        if (softReboot && !postRoot.softRebootStarted) {
+                            val message = app.getString(
+                                R.string.soft_reboot_failed,
+                                postRoot.detail.take(160),
+                            )
+                            mutableState.value = mutableState.value.copy(message = message)
+                            appendLog("[!] $message")
+                        } else if (!softReboot && startShizuku && !postRoot.shizukuStarted && postRoot.detail.isNotBlank()) {
+                            appendLog("[!] Post-root Shizuku automation: ${postRoot.detail.take(200)}")
+                        }
+                    } catch (error: Throwable) {
+                        // Root is already verified. Post-root automation must never
+                        // convert that successful root into an install failure.
+                        appendLog(
+                            "[!] Post-root automation failed: " +
+                                (error.message ?: error.javaClass.simpleName),
+                        )
                     }
                 }
+
+                finishHistory(InstallRunResult.Succeeded)
             } catch (error: Throwable) {
                 appendLog("[-] ${error.message ?: error.javaClass.simpleName}")
                 setPhase(InstallPhase.Failed, app.getString(R.string.status_install_failed))
@@ -360,6 +390,8 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private suspend fun installKernelSu(payloads: VerifiedPayloads) {
+        val autoLoaded = waitForAutoLateLoad()
+
         if (shizukuEnabled()) {
             shizukuStage(payloads.kernelSu, SHIZUKU_KSUD_PATH, "755")
             shizukuStage(payloads.kernelSu, SHIZUKU_KSUD_STAGE_PATH, "755")
@@ -375,17 +407,33 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             appendLog(app.getString(R.string.log_ksu_staged))
         }
 
-        if (AppPreferences.softRebootAfterRoot(app)) {
-            KernelSuSoftReboot.arm(app, helperFile(), shizukuEnabled())
+        if (autoLoaded) {
+            appendLog("[+] KernelSU auto-late-load verified; skipped duplicate late-load")
+        } else {
+            val lateLoad = runHelper("--late-load")
+            require(lateLoad.code == 0) {
+                app.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
+            }
+            if (lateLoad.output.isNotBlank()) appendLog(lateLoad.output)
         }
 
-        val lateLoad = runHelper("--late-load")
-        require(lateLoad.code == 0) {
-            app.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
+        val verification = runHelper("--ksu-info")
+        require(verification.code == 0 || NativeProbe.isKernelSuActive()) {
+            app.getString(R.string.error_ksu_verify, verification.code, verification.output)
         }
-        if (lateLoad.output.isNotBlank()) appendLog(lateLoad.output)
+        if (verification.code == 0 && verification.output.isNotBlank()) appendLog(verification.output)
         storeInstallReceipt()
         appendLog(app.getString(R.string.log_ksu_control_verified))
+    }
+
+    private suspend fun waitForAutoLateLoad(): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + AUTO_LATE_LOAD_WAIT_MILLIS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val probe = runCatching { runHelper("--ksu-info") }.getOrNull()
+            if (probe?.code == 0 || NativeProbe.isKernelSuActive()) return true
+            delay(AUTO_LATE_LOAD_POLL_INTERVAL)
+        }
+        return NativeProbe.isKernelSuActive()
     }
 
     private fun detectInstalled(): Boolean {
@@ -552,10 +600,20 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     private fun updateHistoryProfile(profileId: String) =
         updateHistory { it.copy(profileId = profileId) }
 
-    private fun finishHistory(result: InstallRunResult) {
+    private fun checkpointHistorySuccess() {
         updateHistory { entry ->
             entry.copy(
                 completedAtMillis = System.currentTimeMillis(),
+                result = InstallRunResult.Succeeded,
+                log = mutableState.value.log,
+            )
+        }
+    }
+
+    private fun finishHistory(result: InstallRunResult) {
+        updateHistory { entry ->
+            entry.copy(
+                completedAtMillis = entry.completedAtMillis ?: System.currentTimeMillis(),
                 result = result,
                 log = mutableState.value.log,
             )
@@ -577,6 +635,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         private const val EXPLOIT_STALL_MILLIS = 90_000L
         private const val EXPLOIT_TOTAL_MILLIS = 900_000L
         private const val HELPER_TIMEOUT_MILLIS = 120_000L
+        private const val AUTO_LATE_LOAD_WAIT_MILLIS = 8_000L
         private const val INSTALL_RECEIPT = "install_receipt"
         private const val RECEIPT_BOOT_TOKEN = "kernel_boot_id"
         private const val RECEIPT_VERIFIED = "verified"
@@ -593,6 +652,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         private const val SHIZUKU_KSUD_STAGE_PATH = "/data/local/tmp/.ksud-stage"
         private val LOG_POLL_INTERVAL = 250.milliseconds
         private val HELPER_POLL_INTERVAL = 250.milliseconds
+        private val AUTO_LATE_LOAD_POLL_INTERVAL = 400.milliseconds
         private val SHIZUKU_LOG_POLL_INTERVAL = 1.seconds
         private val ANSI_ESCAPE = Regex("\u001B\\[[0-?]*[ -/]*[@-~]")
         private val P0_OFFSET_PATTERN = Regex(
