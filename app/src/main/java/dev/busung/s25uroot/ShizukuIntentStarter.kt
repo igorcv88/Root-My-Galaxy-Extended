@@ -37,19 +37,12 @@ internal object ShizukuIntentStarter {
             )
         }
 
+        // Do not pre-query the receiver. A package-scoped broadcast is harmless
+        // when the compatible receiver is absent, while pre-querying can produce
+        // false negatives on Android package-visibility/component-state edges.
         val intent = Intent(START_ACTION)
             .setPackage(SHIZUKU_PACKAGE)
             .putExtra(AUTH_EXTRA, token)
-
-        val receiverAvailable = runCatching {
-            @Suppress("DEPRECATION")
-            context.packageManager.queryBroadcastReceivers(intent, 0).isNotEmpty()
-        }.getOrDefault(false)
-        if (!receiverAvailable) {
-            val detail = "Shizuku automation START receiver is unavailable"
-            onLog("[!] $detail")
-            return@withStartLock Outcome(started = false, attempted = false, detail = detail)
-        }
 
         return@withStartLock try {
             context.sendBroadcast(intent)
