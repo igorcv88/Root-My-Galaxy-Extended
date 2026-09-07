@@ -14,6 +14,7 @@
     <string name="adb_pair_cannot_connect" translatable="false">Could not connect to the pairing port</string>
     <string name="adb_pair_wrong_code" translatable="false">The pairing code was incorrect</string>
     <string name="adb_pair_unknown_error" translatable="false">Unknown pairing error</string>
+    <string name="adb_pair_notification_permission_required" translatable="false">Notification access is required for the one-time Wireless ADB pairing code prompt.</string>
     <string name="postroot_adb_pairing" translatable="false">Pair local Wireless ADB</string>
     <string name="postroot_adb_pairing_summary" translatable="false">Pair once with this phone so Root My Galaxy can reconnect locally after future boots.</string>
     <string name="postroot_start_shizuku" translatable="false">Restart Shizuku after root</string>
