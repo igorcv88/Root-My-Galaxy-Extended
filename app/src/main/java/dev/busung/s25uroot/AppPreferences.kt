@@ -37,6 +37,8 @@ object AppPreferences {
     private const val AUTO_ROOT_ENABLED = "auto_root_enabled"
     private const val SOFT_REBOOT_AFTER_ROOT = "soft_reboot_after_root"
     private const val AUTO_START_SHIZUKU_AFTER_ROOT = "auto_start_shizuku_after_root"
+    private const val START_SHIZUKU_ON_BOOT = "start_shizuku_on_boot"
+    private const val SHIZUKU_AUTOMATION_TOKEN = "shizuku_automation_token"
     private const val ADB_PAIRED = "adb_paired"
     private const val CZG3_BOOT_MIN_UPTIME_SEC = "czg3_boot_min_uptime_sec"
     private const val AUTO_ROOT_BOOT_MIN_UPTIME_SEC = "auto_root_boot_min_uptime_sec"
@@ -91,6 +93,26 @@ object AppPreferences {
 
     fun setAutoStartShizukuAfterRoot(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(AUTO_START_SHIZUKU_AFTER_ROOT, enabled).apply()
+    }
+
+    /**
+     * Independent pre-root boot bootstrap. Default off so an existing Shizuku,
+     * Tasker, or other boot starter remains the single owner until the user opts
+     * in to RMG's redundant coordinator explicitly.
+     */
+    fun startShizukuOnBoot(context: Context): Boolean =
+        prefs(context).getBoolean(START_SHIZUKU_ON_BOOT, false)
+
+    fun setStartShizukuOnBoot(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(START_SHIZUKU_ON_BOOT, enabled).apply()
+    }
+
+    /** Authentication token shown by the user's Shizuku automation UI. */
+    fun shizukuAutomationToken(context: Context): String =
+        prefs(context).getString(SHIZUKU_AUTOMATION_TOKEN, "").orEmpty()
+
+    fun setShizukuAutomationToken(context: Context, token: String) {
+        prefs(context).edit().putString(SHIZUKU_AUTOMATION_TOKEN, token.trim()).apply()
     }
 
     fun adbPaired(context: Context): Boolean =
