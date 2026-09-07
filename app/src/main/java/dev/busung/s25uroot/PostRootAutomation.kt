@@ -1,7 +1,8 @@
 package dev.busung.s25uroot
 
+import android.app.Application
 import android.content.Context
-import androidx.core.content.ContextCompat
+import android.content.Intent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -27,11 +28,22 @@ internal object PostRootAutomation {
         if (!softReboot && !startShizuku) return@withContext PostRootResult()
 
         if (!AppPreferences.adbPaired(context)) {
-            // Pairing is a one-time post-root setup. Starting the FGS here means
-            // the first successful root can bootstrap the replacement for the
-            // old Tasker ADB/Shizuku automation without affecting the exploit.
-            runCatching {
-                ContextCompat.startForegroundService(context, AdbPairingService.startIntent(context))
+            // Pairing needs POST_NOTIFICATIONS because the pairing code is entered
+            // through the foreground-service notification. Never start that service
+            // blindly from Auto Root: on Android 13+ a fresh install would have no
+            // visible RemoteInput if notification permission has not been granted.
+            // A manual install runs in the main process with a visible activity, so
+            // hand off to a tiny permission activity there. Auto Root simply records
+            // that one-time pairing is still required.
+            if (Application.getProcessName() == context.packageName) {
+                runCatching {
+                    context.startActivity(
+                        Intent(context, AdbPairingSetupActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                }.onFailure { error ->
+                    onLog("[!] Unable to open Wireless ADB pairing setup: ${error.message ?: error.javaClass.simpleName}")
+                }
             }
             val detail = context.getString(R.string.postroot_adb_not_paired)
             onLog("[!] $detail")
@@ -116,9 +128,6 @@ internal object PostRootAutomation {
                     )
                 }
                 rebootStarted = true
-                // This is best-effort: the current app process may disappear as
-                // soon as zygote is restarted, so all important status lines are
-                // emitted before the kill command itself.
             }
         } finally {
             runCatching { session.close() }
