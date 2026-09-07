@@ -78,6 +78,9 @@
             android:exported="false"
             android:process=":autoroot_gate" />
         <activity
+            android:name=".AdbPairingSetupActivity"
+            android:exported="false" />
+        <activity
             android:name=".InstallActivity"
             android:exported="false" />
         <activity
