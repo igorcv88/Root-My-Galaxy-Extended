@@ -158,8 +158,13 @@ jobs:
               p = Path(path)
               text = p.read_text()
               text = replace_once(text, notification_old, notification_new, f'{path} notification wording')
-              addition = (\n                  f'    <string name="autoroot_not_ready_title">{title}</string>\\n'\n                  f'    <string name="autoroot_not_ready_body">{body}</string>\\n'\n                  '    <string name="autoroot_not_ready_acknowledge" translatable="false">OK</string>\\n'\n              )
-              text = replace_once(text, '</resources>\n', addition + '</resources>\n', f'{path} not-ready strings')
+              nl = chr(10)
+              addition = nl.join([
+                  f'    <string name="autoroot_not_ready_title">{title}</string>',
+                  f'    <string name="autoroot_not_ready_body">{body}</string>',
+                  '    <string name="autoroot_not_ready_acknowledge" translatable="false">OK</string>',
+              ]) + nl
+              text = replace_once(text, '</resources>' + nl, addition + '</resources>' + nl, f'{path} not-ready strings')
               p.write_text(text)
 
           patch_autoroot_strings(
