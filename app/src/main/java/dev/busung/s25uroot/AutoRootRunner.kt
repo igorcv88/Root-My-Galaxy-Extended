@@ -40,25 +40,23 @@ internal class AutoRootRunner(
         executeExploit(payloads.exploit, bootToken)
 
         onStage(AutoRootStage.LoadingKernelSu)
-        val autoLoaded = waitForAutoLateLoad()
+        val autoLoaded = waitForAutoLateLoad(bootToken)
 
         if (autoLoaded) {
-            // v0266 has already crossed the success boundary: the helper loaded
-            // KernelSU in kernel/root context before the app regains control.
-            // Return immediately after verification so the executor can persist
-            // the boot receipt and Succeeded History checkpoint before any
-            // non-critical maintenance or userspace automation begins.
-            onLog("[+] KernelSU auto-late-load verified; skipped duplicate late-load")
+            // Kernel control plus the boot-scoped global readiness invariant prove
+            // that blocking late-load/mount stages finished in PID1's namespace.
+            // Only now is it safe to persist success and start post-root work.
+            onLog("[+] KernelSU auto-late-load globally verified; skipped duplicate late-load")
             onStage(AutoRootStage.VerifyingRoot)
-            verifyKernelSu()
+            verifyKernelSu(bootToken)
             return
         }
 
-        // Auto-late-load did not become active, so staging is required before the
-        // historical client late-load fallback can run. Use atomic replacement so
-        // an older ksud daemon can keep its executable inode open without causing
-        // cp(1) to fail with ETXTBSY / "Text file busy".
-        onLog("[!] KernelSU auto-late-load not ready; using client fallback")
+        // Auto-late-load did not cross the global readiness boundary. Refresh the
+        // staged ksud and use the historical client fallback. The patched ksud
+        // serializes concurrent late-load callers and suppresses same-boot stage
+        // replay, so this fallback cannot race a still-finishing UMH caller.
+        onLog("[!] KernelSU auto-late-load not globally ready; using serialized client fallback")
         stageKernelSuRequired(payloads)
         val lateLoad = runHelper("--late-load")
         require(lateLoad.code == 0) {
@@ -67,10 +65,10 @@ internal class AutoRootRunner(
         if (lateLoad.output.isNotBlank()) onLog(lateLoad.output)
 
         onStage(AutoRootStage.VerifyingRoot)
-        verifyKernelSu()
+        verifyKernelSu(bootToken)
     }
 
-    private suspend fun verifyKernelSu() {
+    private suspend fun verifyKernelSu(bootToken: String) {
         val verification = runCatching { runHelper("--ksu-info") }.getOrNull()
         val nativeActive = NativeProbe.isKernelSuActive()
         require(verification?.code == 0 || nativeActive) {
@@ -83,31 +81,51 @@ internal class AutoRootRunner(
         if (verification?.code == 0 && verification.output.isNotBlank()) {
             onLog(verification.output)
         }
-        onLog(context.getString(R.string.log_ksu_control_verified))
+
+        val global = KernelSuGlobalReadiness.probe(context, bootToken)
+        require(global.exitCode == 0) {
+            context.getString(
+                R.string.error_ksu_verify,
+                global.exitCode,
+                global.output.ifBlank { "KernelSU late-load global readiness is not satisfied" },
+            )
+        }
+        if (global.output.isNotBlank()) onLog(global.output)
+        onLog("[+] KernelSU control and PID1 mount readiness verified")
     }
 
-    private suspend fun waitForAutoLateLoad(): Boolean {
+    private suspend fun waitForAutoLateLoad(bootToken: String): Boolean {
         val deadline = SystemClock.elapsedRealtime() + AUTO_LATE_LOAD_WAIT_MILLIS
         var lastOutput = ""
         while (SystemClock.elapsedRealtime() < deadline) {
             val probe = runCatching { runHelper("--ksu-info") }.getOrNull()
-            if (probe != null) {
-                lastOutput = probe.output
-                if (probe.code == 0) {
-                    if (probe.output.isNotBlank()) onLog(probe.output)
-                    return true
+            val controlActive = probe?.code == 0 || NativeProbe.isKernelSuActive()
+            if (controlActive) {
+                val global = runCatching {
+                    KernelSuGlobalReadiness.probe(context, bootToken)
+                }.getOrNull()
+                if (global != null) {
+                    lastOutput = global.output
+                    if (global.exitCode == 0) {
+                        if (probe?.code == 0 && probe.output.isNotBlank()) onLog(probe.output)
+                        if (global.output.isNotBlank()) onLog(global.output)
+                        return true
+                    }
                 }
+            } else if (probe != null && probe.output.isNotBlank()) {
+                lastOutput = probe.output
             }
-            // Compatibility with the pre-v0266 helper, which has no --ksu-info.
-            // NativeProbe observes the KernelSU control channel directly and is
-            // sufficient to prove that auto/client late-load already succeeded.
-            if (NativeProbe.isKernelSuActive()) return true
             delay(AUTO_LATE_LOAD_POLL_INTERVAL)
         }
         if (lastOutput.isNotBlank()) {
-            onLog("[*] auto-late-load probe: ${lastOutput.takeLast(240)}")
+            onLog("[*] auto-late-load readiness probe: ${lastOutput.takeLast(320)}")
         }
-        return NativeProbe.isKernelSuActive()
+
+        if (!NativeProbe.isKernelSuActive()) return false
+        val finalGlobal = runCatching {
+            KernelSuGlobalReadiness.probe(context, bootToken)
+        }.getOrNull()
+        return finalGlobal?.exitCode == 0
     }
 
     private suspend fun executeExploit(payload: File, bootToken: String) {
