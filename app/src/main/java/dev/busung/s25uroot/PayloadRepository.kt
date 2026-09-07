@@ -59,7 +59,10 @@ class PayloadRepository(private val context: Context) {
 
         if (profile.source == PayloadSource.Offline) {
             onProgress("Payload source: last-known-good offline cache")
-            return KnownGoodPayloadStore.load(context, profile.profileId)
+            val payloads = KnownGoodPayloadStore.load(context, profile.profileId)
+            KernelSuBootstrapStore.prepare(context, payloads)
+            onProgress("KernelSU bootstrap source prepared for root-side auto-late-load")
+            return payloads
         }
 
         onProgress("Payload source: online support feed")
