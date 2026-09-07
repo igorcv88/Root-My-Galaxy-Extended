@@ -17,6 +17,11 @@ internal data class PostRootResult(
  * Post-root userspace automation. This object is deliberately isolated from the
  * exploit path: callers invoke it only after KernelSU has been verified.
  * Wireless ADB and Shizuku are never prerequisites for acquiring root.
+ *
+ * Module activation/zygote refresh has exactly one root-side owner. The app no
+ * longer replays KernelSU post-fs-data/services/boot-completed and never kills
+ * zygote itself; it only launches PostRootModuleKeeper and then gets out of the
+ * way before that keeper performs the guarded one-time respawn.
  */
 internal object PostRootAutomation {
     suspend fun run(
@@ -95,10 +100,10 @@ internal object PostRootAutomation {
                 }
             }
 
-            // Start Shizuku before restarting zygote. The Shizuku server is a
-            // shell-owned app_process, not a zygote child, so this avoids a
-            // fragile reconnect-after-restart dependency and matches the goal
-            // of having Shizuku already alive when the UI returns.
+            // Start Shizuku before the optional zygote refresh. The Shizuku
+            // server is shell-owned app_process, not an app zygote child; doing
+            // this first avoids making its bootstrap depend on reconnecting the
+            // app after the framework refresh.
             if (startShizuku) {
                 val start = startShizuku(session)
                 if (start.exitCode != 0) {
@@ -120,14 +125,35 @@ internal object PostRootAutomation {
             }
 
             if (softReboot) {
-                val lifecycle = applyKernelSuLifecycle(session, onLog)
-                if (!lifecycle.first) {
+                val bootId = AutoRootSupport.currentBootToken()
+                if (bootId.isNullOrBlank()) {
                     return@withContext PostRootResult(
                         shizukuStarted = shizukuStarted,
-                        detail = lifecycle.second,
+                        detail = "kernel boot id unavailable before module refresh",
+                    )
+                }
+
+                // The keeper is the only owner of module-readiness checks and
+                // zygote respawn. It is detached from the app so the Android
+                // processes may die during the refresh without losing the job or
+                // launching a competing second restart.
+                val keeper = PostRootModuleKeeper.launch(
+                    adb = session,
+                    expectedBootId = bootId,
+                    onLog = onLog,
+                )
+                if (!keeper.accepted) {
+                    return@withContext PostRootResult(
+                        shizukuStarted = shizukuStarted,
+                        detail = keeper.detail,
                     )
                 }
                 rebootStarted = true
+                if (keeper.alreadyDone) {
+                    onLog("[+] Module refresh marker already satisfied for boot_id=$bootId")
+                } else {
+                    onLog("[*] Module keeper owns the pending zygote refresh for boot_id=$bootId")
+                }
             }
         } finally {
             runCatching { session.close() }
@@ -136,41 +162,8 @@ internal object PostRootAutomation {
         PostRootResult(
             softRebootStarted = rebootStarted,
             shizukuStarted = shizukuStarted,
-            detail = "post-root automation complete",
+            detail = "post-root automation accepted",
         )
-    }
-
-    /** HyperRamzey's device-tested userspace activation route. */
-    private suspend fun applyKernelSuLifecycle(
-        adb: WirelessAdbSession,
-        onLog: (String) -> Unit,
-    ): Pair<Boolean, String> {
-        suspend fun stage(name: String, waitMillis: Long): Pair<Boolean, String> {
-            val command =
-                "su -c 'setsid sh -c \"timeout 30 /data/adb/ksud $name " +
-                    "> /data/local/tmp/ksud-$name.log 2>&1 < /dev/null\" & echo ${name}_bg'"
-            val result = adb.shell(command)
-            if (result.exitCode != 0) {
-                return false to "ksud $name launch failed: ${result.output.trim().takeLast(180)}"
-            }
-            onLog("[*] ksud $name launched")
-            delay(waitMillis)
-            return true to ""
-        }
-
-        stage("post-fs-data", 12_000).let { if (!it.first) return it }
-        stage("services", 5_000).let { if (!it.first) return it }
-        stage("boot-completed", 3_000).let { if (!it.first) return it }
-
-        onLog("[*] KernelSU lifecycle complete; restarting zygote now")
-        val kill = adb.shell(
-            "su -c 'for p in \$(pidof zygote64) \$(pidof zygote); do " +
-                "kill -9 \$p 2>/dev/null; done; echo zygote-killed'",
-        )
-        if (kill.exitCode != 0 || !kill.output.contains("zygote-killed")) {
-            return false to "zygote restart failed: ${kill.output.trim().takeLast(180)}"
-        }
-        return true to ""
     }
 
     private fun startShizuku(adb: WirelessAdbSession): LocalAdbClient.ShellResult =
