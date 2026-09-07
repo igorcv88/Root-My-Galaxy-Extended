@@ -4,13 +4,27 @@ import android.os.SystemClock
 import kotlinx.coroutines.delay
 
 /**
- * A plain Android-side minimum boot-uptime gate for CZG3.
+ * Plain Android-side minimum boot-uptime gates for CZG3.
  *
- * Despite the historical UI name "Diagnostic Launch Time", this class performs
- * no diagnostics, observation, sampling, logging, or native instrumentation.
+ * The manual setting keeps the historical "Diagnostic Launch Time" behavior.
+ * Auto Root deliberately uses its own shorter conservative floor so changing
+ * boot automation latency cannot silently change Manual Standalone behavior.
+ * Neither gate performs diagnostics, observation, logging or native
+ * instrumentation, and neither touches the exploit hot path.
  */
 internal object DiagnosticUptime {
+    /** Manual Online/Offline default; preserves the established manual behavior. */
     const val DEFAULT_SECONDS = 120
+
+    /**
+     * Auto Root default total kernel uptime.
+     *
+     * 60 s keeps a modest post-boot stabilization margin for the still-racy FOPS
+     * stage while removing the former mandatory 120 s Auto Root wait. Because
+     * BOOT_COMPLETED itself normally arrives after part of this interval has
+     * elapsed, the actual foreground wait is only the remaining time to 60 s.
+     */
+    const val AUTO_ROOT_DEFAULT_SECONDS = 60
 
     val allowedSeconds = listOf(0, 30, 60, 90, 120, 180, 300, 600)
 
