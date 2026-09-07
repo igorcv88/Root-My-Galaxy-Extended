@@ -26,6 +26,18 @@ object AdbPairing {
         false
     }
 
+    /**
+     * Disables wireless debugging programmatically.
+     * Used only to restore the previous state after a temporary local-ADB boot
+     * bootstrap; callers decide whether RMG was the component that enabled it.
+     */
+    fun disableWirelessAdb(context: Context): Boolean = try {
+        Settings.Global.putInt(context.contentResolver, ADB_WIFI_ENABLED_SETTING, 0)
+    } catch (e: SecurityException) {
+        Log.w(TAG, "WRITE_SECURE_SETTINGS not granted", e)
+        false
+    }
+
     fun isWirelessAdbEnabled(context: Context): Boolean = try {
         Settings.Global.getInt(context.contentResolver, ADB_WIFI_ENABLED_SETTING, 0) == 1
     } catch (e: Exception) {
