@@ -12,6 +12,7 @@ concurrency:
 
 env:
   RELEASE_SERIES: "0.3"
+  PAYLOAD_REPO: "igorcv88/Root-My-Galaxy-Payloads-S938B"
 
 jobs:
   release:
@@ -63,11 +64,106 @@ jobs:
             echo "RELEASE_TAG=$RELEASE_TAG"
           } >> "$GITHUB_ENV"
 
-      - name: Reservar tag da release
+      - name: Sincronizar root helper do payload CZG3
         run: |
           set -euo pipefail
-          git tag "$RELEASE_TAG" "$GITHUB_SHA"
-          git push origin "refs/tags/${RELEASE_TAG}"
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import urllib.request
+
+          repo = os.environ["PAYLOAD_REPO"]
+          api = f"https://api.github.com/repos/{repo}/git/ref/heads/main"
+          request = urllib.request.Request(
+              api,
+              headers={"User-Agent": "Root-My-Galaxy-release"},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              ref = json.load(response)
+          commit = ref["object"]["sha"]
+          if len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit):
+              raise SystemExit("Payload repository returned an invalid main commit SHA")
+
+          raw_root = f"https://raw.githubusercontent.com/{repo}/{commit}"
+          with urllib.request.urlopen(
+              urllib.request.Request(
+                  f"{raw_root}/support/targets-v3.json",
+                  headers={"User-Agent": "Root-My-Galaxy-release"},
+              ),
+              timeout=30,
+          ) as response:
+              manifest = json.load(response)
+
+          targets = [
+              target for target in manifest.get("payloads", [])
+              if target.get("payloadId") == "pa3q-S938BXXSBCZG3"
+          ]
+          if len(targets) != 1:
+              raise SystemExit("Expected exactly one CZG3 v3 payload entry")
+          target = targets[0]
+          helper = target.get("rootHelper")
+          exploit_url = target.get("exploit", {}).get("url", "")
+
+          destination = pathlib.Path(
+              "app/src/main/jniLibs/arm64-v8a/libcve43499root.so"
+          )
+          if not destination.is_file():
+              raise SystemExit(f"Bundled root helper is missing: {destination}")
+
+          if helper is None:
+              # Transitional compatibility: v0265 predates rootHelper metadata.
+              # A v0266 feed without metadata is an invalid partial publication.
+              if "-v0266/" in exploit_url:
+                  raise SystemExit("CZG3 v0266 feed is missing rootHelper metadata")
+              data = destination.read_bytes()
+              digest = hashlib.sha256(data).hexdigest()
+              print(
+                  "Payload feed has no rootHelper metadata (v0265 transition); "
+                  "preserving the helper committed in the app"
+              )
+              synced = "false"
+          else:
+              mutable_prefix = (
+                  f"https://raw.githubusercontent.com/{repo}/main/"
+              )
+              url = helper.get("url", "")
+              if not url.startswith(mutable_prefix):
+                  raise SystemExit(f"Unexpected rootHelper URL: {url}")
+              path = url.removeprefix(mutable_prefix)
+              if not path.startswith("artifacts/pa3q-S938BXXSBCZG3-v0266/"):
+                  raise SystemExit(f"Unexpected CZG3 rootHelper path: {path}")
+              pinned_url = f"{raw_root}/{path}"
+              with urllib.request.urlopen(
+                  urllib.request.Request(
+                      pinned_url,
+                      headers={"User-Agent": "Root-My-Galaxy-release"},
+                  ),
+                  timeout=60,
+              ) as response:
+                  data = response.read()
+
+              expected_size = int(helper["size"])
+              expected_sha = str(helper["sha256"]).lower()
+              digest = hashlib.sha256(data).hexdigest()
+              if len(data) != expected_size:
+                  raise SystemExit(
+                      f"rootHelper size mismatch: expected={expected_size} actual={len(data)}"
+                  )
+              if digest != expected_sha:
+                  raise SystemExit(
+                      f"rootHelper SHA-256 mismatch: expected={expected_sha} actual={digest}"
+                  )
+              destination.write_bytes(data)
+              synced = "true"
+              print(f"Embedded rootHelper from payload commit {commit}: {digest}")
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"PAYLOAD_COMMIT={commit}\n")
+              env.write(f"ROOT_HELPER_SHA256={digest}\n")
+              env.write(f"ROOT_HELPER_SYNCED={synced}\n")
+          PY
 
       - name: Verificar regras do Auto Root
         run: |
@@ -83,6 +179,12 @@ jobs:
             exit 1
           fi
 
+      - name: Reservar tag da release
+        run: |
+          set -euo pipefail
+          git tag "$RELEASE_TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/${RELEASE_TAG}"
+
       - name: Preparar Java 21
         uses: actions/setup-java@v6
         with:
@@ -95,6 +197,9 @@ jobs:
       - name: Testar, validar e gerar APK
         run: |
           set -euo pipefail
+          test -s app/src/main/jniLibs/arm64-v8a/libcve43499root.so
+          actual_helper_sha="$(sha256sum app/src/main/jniLibs/arm64-v8a/libcve43499root.so | awk '{print $1}')"
+          test "$actual_helper_sha" = "$ROOT_HELPER_SHA256"
           chmod +x gradlew
           ./gradlew --build-cache \
             :app:testDebugUnitTest \
@@ -176,6 +281,13 @@ jobs:
           export BASE_BRANCH="main"
           export NOTES_PATH
           python3 .github/scripts/build_release_notes.py
+          cat >> "$NOTES_PATH" <<EOF
+
+          ### Payload provenance
+          - Payload commit: \`$PAYLOAD_COMMIT\`
+          - Root helper SHA-256: \`$ROOT_HELPER_SHA256\`
+          - Root helper synchronized from feed: \`$ROOT_HELPER_SYNCED\`
+          EOF
           test -s "$NOTES_PATH"
           echo "NOTES_PATH=$NOTES_PATH" >> "$GITHUB_ENV"
 
