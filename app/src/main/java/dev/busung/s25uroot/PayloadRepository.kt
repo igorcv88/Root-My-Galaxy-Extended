@@ -82,7 +82,10 @@ class PayloadRepository(private val context: Context) {
         )
         Os.chmod(exploit.absolutePath, 0b100100100)
         Os.chmod(kernelSu.absolutePath, 0b100100100)
-        return VerifiedPayloads(profile, exploit, kernelSu, PayloadSource.Online)
+        val payloads = VerifiedPayloads(profile, exploit, kernelSu, PayloadSource.Online)
+        KernelSuBootstrapStore.prepare(context, payloads)
+        onProgress("KernelSU bootstrap source prepared for root-side auto-late-load")
+        return payloads
     }
 
     private fun verifyBundledRootHelper(profile: TargetProfile) {
