@@ -33,6 +33,13 @@ internal object PostRootAutomation {
     ): PostRootResult = withContext(Dispatchers.IO) {
         if (!softReboot && !startShizuku) return@withContext PostRootResult()
 
+        // Root is now verified. The pre-root coordinator no longer owns Shizuku
+        // startup for this boot. Stopping it also cancels any narrow ADB window
+        // before the root-capable path proceeds, eliminating an RMG-vs-RMG race.
+        if (startShizuku) {
+            ShizukuBootService.stop(context)
+        }
+
         // The user's thedjchi/Shizuku fork commonly has its Binder available
         // before Root My Galaxy runs. In that case it is already a shell/root
         // transport and Wireless ADB must not be touched.
@@ -50,9 +57,6 @@ internal object PostRootAutomation {
                 )
             }
 
-            // A Binder can theoretically be alive in a context that cannot use
-            // KernelSU --allow-shell. The app-authenticated helper is the only
-            // additional root bridge attempted in this state; ADB stays off.
             onLog("[!] Shizuku Binder is alive but cannot obtain KernelSU shell root; trying app root helper")
         }
 
@@ -62,32 +66,14 @@ internal object PostRootAutomation {
 
             var shizukuStarted = ShizukuController.pingUntilRunning(500)
             if (startShizuku && !shizukuStarted) {
-                val start = startShizukuWithRoot(context, helperRoot, onLog)
-                if (start.exitCode != 0) {
-                    val detail = start.output.trim().ifBlank {
-                        "root-mode Shizuku starter exit ${start.exitCode}"
-                    }
-                    onLog("[-] ${context.getString(R.string.postroot_shizuku_failed, detail.takeLast(180))}")
-                    if (!softReboot) {
-                        return@withContext PostRootResult(detail = detail)
-                    }
-                } else {
-                    val output = start.output.trim()
-                    if (output.isNotBlank()) onLog("[*] $output")
-                    shizukuStarted = ShizukuController.pingUntilRunning(SHIZUKU_BINDER_TIMEOUT_MILLIS)
-                    if (shizukuStarted) {
-                        onLog("[+] Shizuku root-mode starter completed through RMG root helper; Binder is available")
-                    } else {
-                        onLog("[!] Shizuku root-mode starter returned successfully but Binder did not appear")
-                    }
+                shizukuStarted = startShizukuWithRootOrIntent(context, helperRoot, onLog)
+                if (!shizukuStarted && !softReboot) {
+                    return@withContext PostRootResult(detail = "No Shizuku startup method produced a Binder")
                 }
             } else if (shizukuStarted) {
                 onLog("[+] Shizuku Binder became available before helper startup; no restart needed")
             }
 
-            // Once the Binder is live, prefer it for subsequent post-root work.
-            // If it is not usable as a root bridge, keep the app-authenticated
-            // helper rather than opening Wireless ADB.
             val preferredRoot = if (shizukuStarted) {
                 rootShellFromShizuku(onLog) ?: helperRoot
             } else {
@@ -102,9 +88,6 @@ internal object PostRootAutomation {
             )
         }
 
-        // Binder-first is a hard invariant. If Shizuku is alive but neither its
-        // own shell nor the RMG helper can provide root, report that condition;
-        // do not open Wireless ADB behind an already-available Binder.
         if (ShizukuController.isRunning()) {
             val detail = "Shizuku Binder is available but no root-capable post-root bridge is usable"
             onLog("[-] $detail; Wireless ADB fallback suppressed")
@@ -137,22 +120,9 @@ internal object PostRootAutomation {
 
             var shizukuStarted = ShizukuController.pingUntilRunning(500)
             if (startShizuku && !shizukuStarted) {
-                val start = startShizukuWithRoot(context, adbRoot, onLog)
-                if (start.exitCode != 0) {
-                    val detail = start.output.trim().ifBlank { "root-mode Shizuku starter exit ${start.exitCode}" }
-                    onLog("[-] ${context.getString(R.string.postroot_shizuku_failed, detail.takeLast(180))}")
-                    if (!softReboot) {
-                        return@withContext PostRootResult(detail = detail)
-                    }
-                } else {
-                    val output = start.output.trim()
-                    if (output.isNotBlank()) onLog("[*] $output")
-                    shizukuStarted = ShizukuController.pingUntilRunning(SHIZUKU_BINDER_TIMEOUT_MILLIS)
-                    if (shizukuStarted) {
-                        onLog("[+] Shizuku root-mode starter completed and Binder is available")
-                    } else {
-                        onLog("[!] Shizuku root-mode starter returned successfully but Binder did not appear")
-                    }
+                shizukuStarted = startShizukuWithRootOrIntent(context, adbRoot, onLog)
+                if (!shizukuStarted && !softReboot) {
+                    return@withContext PostRootResult(detail = "No Shizuku startup method produced a Binder")
                 }
             } else if (shizukuStarted) {
                 onLog("[+] Shizuku Binder became available before fallback startup; no restart needed")
@@ -167,6 +137,9 @@ internal object PostRootAutomation {
             )
         } finally {
             runCatching { session.close() }
+            // Security invariant: RMG never leaves Wireless Debugging enabled
+            // after its local-ADB fallback, regardless of its entry state.
+            TemporaryWirelessAdb.forceDisable(context, onLog)
         }
     }
 
@@ -175,8 +148,6 @@ internal object PostRootAutomation {
         onLog: (String) -> Unit,
     ): WirelessAdbSession? {
         if (!AppPreferences.adbPaired(context)) {
-            // Local ADB is fallback-only. Pairing is requested only when no
-            // usable Shizuku Binder or app-authenticated root helper exists.
             if (Application.getProcessName() == context.packageName) {
                 runCatching {
                     context.startActivity(
@@ -191,30 +162,20 @@ internal object PostRootAutomation {
             return null
         }
 
-        if (!AdbPairing.isWirelessAdbEnabled(context)) {
-            if (!AdbPairing.enableWirelessAdb(context)) {
-                onLog("[-] WRITE_SECURE_SETTINGS is not granted; cannot enable Wireless Debugging fallback")
-                return null
-            }
-            onLog("[*] Wireless Debugging enabled only for local ADB fallback")
-            delay(1_500)
-        }
+        if (!TemporaryWirelessAdb.begin(context, onLog)) return null
+        delay(LOCAL_ADB_ENABLE_SETTLE_MILLIS)
 
-        return runCatching { WirelessAdbSession.open(context, 45_000) }
+        return runCatching { WirelessAdbSession.open(context, LOCAL_ADB_DISCOVERY_TIMEOUT_MILLIS) }
             .onSuccess { onLog("[+] Local Wireless ADB fallback connected") }
             .getOrElse { error ->
                 val detail = error.message ?: error.javaClass.simpleName
                 if (looksLikePairingLoss(detail)) AppPreferences.setAdbPaired(context, false)
                 onLog("[-] Local Wireless ADB fallback failed: $detail")
+                TemporaryWirelessAdb.forceDisable(context, onLog)
                 null
             }
     }
 
-    /**
-     * Return a root-command executor backed by an existing Shizuku Binder.
-     * Shizuku may itself be running as root or as adb shell; in shell mode the
-     * v0266 --allow-shell policy supplies the one required `su -c` hop.
-     */
     private fun rootShellFromShizuku(
         onLog: (String) -> Unit,
     ): ((String) -> LocalAdbClient.ShellResult)? {
@@ -266,33 +227,35 @@ internal object PostRootAutomation {
         }
     }
 
-    /**
-     * Use the same starter policy as early boot: current native libshizuku.so
-     * first, then the documented legacy start.sh only when needed. This keeps
-     * post-root recovery compatible without making Wireless ADB a dependency.
-     */
-    private suspend fun startShizukuWithRoot(
+    private suspend fun startShizukuWithRootOrIntent(
         context: Context,
         rootShell: (String) -> LocalAdbClient.ShellResult,
         onLog: (String) -> Unit,
-    ): LocalAdbClient.ShellResult {
-        val outcome = ShizukuStarter.start(
+    ): Boolean {
+        val shellOutcome = ShizukuStarter.start(
             context = context,
             shell = rootShell,
             binderTimeoutMillis = SHIZUKU_BINDER_TIMEOUT_MILLIS,
             onLog = onLog,
         )
-        return if (outcome.started) {
-            LocalAdbClient.ShellResult(
-                0,
-                "Shizuku started via ${outcome.method ?: "compatible starter"}",
-            )
-        } else {
-            LocalAdbClient.ShellResult(
-                44,
-                outcome.detail.ifBlank { "no compatible Shizuku starter produced a Binder" },
-            )
+        if (shellOutcome.started) {
+            onLog("[+] Shizuku root-mode startup completed via ${shellOutcome.method ?: "compatible starter"}")
+            return true
         }
+
+        val intentOutcome = ShizukuIntentStarter.start(
+            context = context,
+            binderTimeoutMillis = SHIZUKU_BINDER_TIMEOUT_MILLIS,
+            onLog = onLog,
+        )
+        if (intentOutcome.started) return true
+
+        val detail = listOf(shellOutcome.detail, intentOutcome.detail)
+            .filter { it.isNotBlank() }
+            .joinToString("; ")
+            .ifBlank { "no compatible Shizuku starter produced a Binder" }
+        onLog("[-] ${context.getString(R.string.postroot_shizuku_failed, detail.takeLast(180))}")
+        return false
     }
 
     private fun finishPostRoot(
@@ -346,7 +309,7 @@ internal object PostRootAutomation {
         val lower = message.lowercase()
         return "certificate_unknown" in lower ||
             "certificate unknown" in lower ||
-            "pairing" in lower && "revoked" in lower ||
+            ("pairing" in lower && "revoked" in lower) ||
             LocalAdbClient.PAIRING_LOST_MARKER.lowercase() in lower
     }
 
@@ -354,4 +317,6 @@ internal object PostRootAutomation {
 
     private const val SHIZUKU_ALREADY_RUNNING_PROBE_MILLIS = 750L
     private const val SHIZUKU_BINDER_TIMEOUT_MILLIS = 12_000L
+    private const val LOCAL_ADB_ENABLE_SETTLE_MILLIS = 800L
+    private const val LOCAL_ADB_DISCOVERY_TIMEOUT_MILLIS = 15_000L
 }
