@@ -34,7 +34,8 @@ class PostRootModuleKeeperTest {
 
         val replay = Regex("""(^|[;&|]\s*)ksud\s+(post-fs-data|services|boot-completed)(\s|$)""")
         assertFalse(replay.containsMatchIn(executable))
-        assertTrue(executable.contains("kill -9"))
+        assertFalse(executable.contains("kill -9"))
+        assertTrue(executable.contains("/system/bin/setprop ctl.restart zygote"))
         assertTrue(script.contains(PostRootModuleKeeper.DONE_MARKER))
     }
 
