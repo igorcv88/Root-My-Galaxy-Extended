@@ -1734,6 +1734,8 @@ private fun SettingsPage(
                 )
             }
         }
+        item { SectionLabel(stringResource(R.string.shizuku_boot_section)) }
+        item { ShizukuBootSettingsCard() }
         item { SectionLabel(stringResource(R.string.root_runtime_settings)) }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
