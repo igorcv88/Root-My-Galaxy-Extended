@@ -9,6 +9,11 @@ import java.io.File
  * libshizuku.so starter. Older/manual distributions may expose start.sh on
  * shared storage. The native starter is always preferred; legacy paths are
  * compatibility-only fallbacks and their absence is not an error.
+ *
+ * All RMG shell-based starts are serialized across app processes and re-check
+ * the Binder immediately before every launch. This closes the edge case where
+ * the boot service and post-root automation both observed "not running" before
+ * one of them had time to publish the Binder.
  */
 internal object ShizukuStarter {
     internal data class Outcome(
@@ -22,8 +27,22 @@ internal object ShizukuStarter {
         shell: (String) -> LocalAdbClient.ShellResult,
         binderTimeoutMillis: Long,
         onLog: (String) -> Unit = {},
+    ): Outcome = ShizukuStartCoordinator.withStartLock(context) {
+        startLocked(
+            context = context,
+            shell = shell,
+            binderTimeoutMillis = binderTimeoutMillis,
+            onLog = onLog,
+        )
+    }
+
+    private suspend fun startLocked(
+        context: Context,
+        shell: (String) -> LocalAdbClient.ShellResult,
+        binderTimeoutMillis: Long,
+        onLog: (String) -> Unit,
     ): Outcome {
-        if (ShizukuController.isRunning()) {
+        if (ShizukuController.pingUntilRunning(BINDER_RACE_PROBE_MILLIS)) {
             onLog("[+] Shizuku Binder already available; no starter selected")
             return Outcome(started = true, method = "existing-binder")
         }
@@ -32,6 +51,11 @@ internal object ShizukuStarter {
         if (nativeCommand != null) {
             val nativeProbe = shell("test -f ${shellQuote(nativeCommand.starterPath)}")
             if (nativeProbe.exitCode == 0) {
+                if (ShizukuController.pingUntilRunning(BINDER_RACE_PROBE_MILLIS)) {
+                    onLog("[+] Shizuku Binder appeared before native-lib launch; skipped duplicate starter")
+                    return Outcome(started = true, method = "existing-binder")
+                }
+
                 onLog("[*] Shizuku startup selected: native-lib")
                 val result = shell("${nativeCommand.command} 2>&1")
                 if (result.exitCode == 0) {
@@ -51,8 +75,18 @@ internal object ShizukuStarter {
             onLog("[*] Shizuku native-lib paths are unavailable; checking legacy fallback")
         }
 
+        if (ShizukuController.pingUntilRunning(BINDER_RACE_PROBE_MILLIS)) {
+            onLog("[+] Shizuku Binder appeared before legacy fallback; skipped duplicate starter")
+            return Outcome(started = true, method = "existing-binder")
+        }
+
         val legacyPath = firstLegacyScript(shell)
         if (legacyPath != null) {
+            if (ShizukuController.pingUntilRunning(BINDER_RACE_PROBE_MILLIS)) {
+                onLog("[+] Shizuku Binder appeared before legacy start.sh launch; skipped duplicate starter")
+                return Outcome(started = true, method = "existing-binder")
+            }
+
             onLog("[*] Shizuku startup selected: legacy-start.sh")
             val result = shell("sh ${shellQuote(legacyPath)} 2>&1")
             if (result.exitCode == 0) {
@@ -73,7 +107,7 @@ internal object ShizukuStarter {
 
         // Missing legacy scripts are normal on current Shizuku builds. Only the
         // aggregate inability to start the service is reported as the outcome.
-        val detail = "no compatible Shizuku starter produced a Binder"
+        val detail = "no compatible Shizuku shell starter produced a Binder"
         onLog("[!] $detail (legacy start.sh not present; skipped)")
         return Outcome(started = false, detail = detail)
     }
@@ -109,6 +143,7 @@ internal object ShizukuStarter {
     private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
 
     private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+    private const val BINDER_RACE_PROBE_MILLIS = 500L
     private val LEGACY_START_PATHS = arrayOf(
         "/storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh",
         "/sdcard/Android/data/moe.shizuku.privileged.api/start.sh",
