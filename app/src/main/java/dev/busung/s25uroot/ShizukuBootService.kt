@@ -96,10 +96,11 @@ class ShizukuBootService : Service() {
 
         var session: WirelessAdbSession? = null
         try {
-            session = WirelessAdbSession.open(this, PORT_DISCOVERY_TIMEOUT_MILLIS)
+            val activeSession = WirelessAdbSession.open(this, PORT_DISCOVERY_TIMEOUT_MILLIS)
+            session = activeSession
             val outcome = ShizukuStarter.start(
                 context = this,
-                shell = { command -> session.shell(command) },
+                shell = { command -> activeSession.shell(command) },
                 binderTimeoutMillis = BINDER_START_TIMEOUT_MILLIS,
                 onLog = { message -> Log.i(TAG, message) },
             )
