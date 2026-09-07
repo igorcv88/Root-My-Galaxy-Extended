@@ -19,17 +19,30 @@ import kotlinx.coroutines.delay
  * setting off later instead of leaving Wireless Debugging enabled indefinitely.
  */
 internal object TemporaryWirelessAdb {
+    fun begin(
+        context: Context,
+        onLog: (String) -> Unit = {},
+    ): Boolean {
+        armCleanup(context)
+        val enabled = AdbPairing.enableWirelessAdb(context)
+        if (enabled) {
+            onLog("[*] Wireless Debugging enabled temporarily by RMG")
+        } else {
+            cancelCleanup(context)
+            onLog("[!] Unable to enable Wireless Debugging; WRITE_SECURE_SETTINGS is required")
+        }
+        return enabled
+    }
+
     suspend fun <T> use(
         context: Context,
         settleMillis: Long = 1_000L,
         onLog: (String) -> Unit = {},
         block: suspend () -> T,
     ): T {
-        armCleanup(context)
-        check(AdbPairing.enableWirelessAdb(context)) {
+        check(begin(context, onLog)) {
             "Unable to enable Wireless Debugging; WRITE_SECURE_SETTINGS is required"
         }
-        onLog("[*] Wireless Debugging enabled temporarily by RMG")
         try {
             if (settleMillis > 0) delay(settleMillis)
             return block()
