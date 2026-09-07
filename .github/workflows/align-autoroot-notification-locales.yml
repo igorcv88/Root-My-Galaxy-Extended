@@ -1,0 +1,54 @@
+name: Align Auto Root Notification Locales
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/align-autoroot-notification-locales.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Align localized notification semantics
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          translations = {
+              'values-fr': 'Auto Root reste activé, mais les notifications de progression peuvent être masquées tant que l’autorisation de notification n’est pas accordée.',
+              'values-ja': 'Auto Root は有効のままですが、通知権限が許可されるまで進行状況の通知が表示されない場合があります。',
+              'values-ko': 'Auto Root는 계속 활성화되지만 알림 권한을 허용할 때까지 진행 알림이 표시되지 않을 수 있습니다.',
+              'values-ru': 'Auto Root останется включённым, но уведомления о ходе выполнения могут быть скрыты, пока не предоставлено разрешение на уведомления.',
+              'values-tr': 'Auto Root etkin kalır, ancak bildirim izni verilene kadar ilerleme bildirimleri görünmeyebilir.',
+              'values-uz': 'Auto Root yoqilgan holda qoladi, ammo bildirishnoma ruxsati berilmaguncha jarayon bildirishnomalari ko‘rinmasligi mumkin.',
+              'values-vi': 'Auto Root vẫn được bật, nhưng thông báo tiến trình có thể bị ẩn cho đến khi quyền thông báo được cấp.',
+              'values-zh-rCN': 'Auto Root 将保持启用，但在授予通知权限之前，进度通知可能不会显示。',
+              'values-zh-rTW': 'Auto Root 會保持啟用，但在授予通知權限之前，進度通知可能不會顯示。',
+          }
+
+          pattern = re.compile(r'(<string name="autoroot_notification_permission">).*?(</string>)')
+          for folder, value in translations.items():
+              path = Path('app/src/main/res') / folder / 'strings_autoroot.xml'
+              text = path.read_text()
+              text, count = pattern.subn(r'\1' + value + r'\2', text, count=1)
+              if count != 1:
+                  raise SystemExit(f'notification string not found exactly once: {path}')
+              path.write_text(text)
+          PY
+
+          rm -f .github/workflows/align-autoroot-notification-locales.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Align Auto Root notification permission translations"
+          git push
