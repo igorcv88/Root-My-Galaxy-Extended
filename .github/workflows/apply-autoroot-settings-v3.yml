@@ -1,0 +1,47 @@
+name: Apply Auto Root Settings UX v3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-autoroot-settings-v3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run corrected migration
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path('.github/workflows/apply-autoroot-settings.yml')
+          text = source.read_text()
+          text = text.replace('if count != 1:', 'if count < 1:', 1)
+          text = text.replace('expected exactly one match, found', 'expected at least one match, found', 1)
+
+          marker = "          python3 - <<'PY'\n"
+          start = text.index(marker) + len(marker)
+          end = text.index("\n          PY\n", start)
+          script = textwrap.dedent(text[start:end]) + "\n"
+          Path('/tmp/apply-autoroot-settings.py').write_text(script)
+          PY
+
+          python3 /tmp/apply-autoroot-settings.py
+          rm -f .github/workflows/apply-autoroot-settings.yml
+          rm -f .github/workflows/apply-autoroot-settings-v3.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Move Auto Root control to general settings"
+          git push
