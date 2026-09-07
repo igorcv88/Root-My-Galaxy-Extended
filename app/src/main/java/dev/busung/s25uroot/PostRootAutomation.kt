@@ -36,7 +36,7 @@ internal object PostRootAutomation {
 
         // The user's thedjchi/Shizuku fork commonly has its Binder available
         // before Root My Galaxy runs. In that case it is already a shell/root
-        // transport and opening Wireless ADB again is redundant.
+        // transport and Wireless ADB must not be touched.
         if (ShizukuController.pingUntilRunning(SHIZUKU_ALREADY_RUNNING_PROBE_MILLIS)) {
             onLog("[+] Shizuku Binder already available; skipping Wireless ADB bootstrap")
             val shizukuRoot = rootShellFromShizuku(onLog)
@@ -52,8 +52,8 @@ internal object PostRootAutomation {
             }
 
             // A Binder can theoretically be alive in a context that cannot use
-            // KernelSU --allow-shell. The app-authenticated helper is the next
-            // bridge; local ADB remains last-resort compatibility only.
+            // KernelSU --allow-shell. The app-authenticated helper is the only
+            // additional root bridge attempted in this state; ADB stays off.
             onLog("[!] Shizuku Binder is alive but cannot obtain KernelSU shell root; trying app root helper")
         }
 
@@ -100,6 +100,18 @@ internal object PostRootAutomation {
                 softReboot = softReboot,
                 shizukuStarted = shizukuStarted,
                 onLog = onLog,
+            )
+        }
+
+        // Binder-first is a hard invariant. If Shizuku is alive but neither its
+        // own shell nor the RMG helper can provide root, report that condition;
+        // do not open Wireless ADB behind an already-available Binder.
+        if (ShizukuController.isRunning()) {
+            val detail = "Shizuku Binder is available but no root-capable post-root bridge is usable"
+            onLog("[-] $detail; Wireless ADB fallback suppressed")
+            return@withContext PostRootResult(
+                shizukuStarted = true,
+                detail = detail,
             )
         }
 
@@ -256,10 +268,9 @@ internal object PostRootAutomation {
     }
 
     /**
-     * Current thedjchi/Shizuku does not use the old external-storage start.sh.
-     * Its own Starter.kt executes nativeLibraryDir/libshizuku.so with
-     * --apk=<sourceDir>. Use that exact root-mode entry point when available;
-     * retain start.sh only as a compatibility fallback for older distributions.
+     * thedjchi/Shizuku root mode executes Starter.internalCommand directly:
+     * nativeLibraryDir/libshizuku.so --apk=<sourceDir>. Do not fall back to the
+     * external-storage start.sh used by older/original Shizuku distributions.
      */
     private fun startShizukuWithRoot(
         context: Context,
@@ -278,14 +289,9 @@ internal object PostRootAutomation {
             }
         }
 
-        return rootShell(
-            "script=''; " +
-                "for p in " +
-                "'/sdcard/Android/data/$SHIZUKU_PACKAGE/start.sh' " +
-                "'/storage/emulated/0/Android/data/$SHIZUKU_PACKAGE/start.sh'; do " +
-                "[ -f \"\$p\" ] && script=\"\$p\" && break; done; " +
-                "[ -n \"\$script\" ] || { echo 'Shizuku root starter not found' >&2; exit 44; }; " +
-                "sh \"\$script\"",
+        return LocalAdbClient.ShellResult(
+            44,
+            "thedjchi/Shizuku root starter unavailable: $SHIZUKU_PACKAGE/libshizuku.so",
         )
     }
 
