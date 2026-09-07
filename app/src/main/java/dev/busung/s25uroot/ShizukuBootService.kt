@@ -9,7 +9,6 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.io.File
@@ -47,7 +46,7 @@ class ShizukuBootService : Service() {
         }
         if (bootstrapJob?.isActive == true) return START_NOT_STICKY
 
-        val notification = buildNotification(getString(R.string.shizuku_boot_starting))
+        val notification = buildNotification(getString(R.string.log_shizuku_prepare))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 SHIZUKU_BOOT_NOTIFICATION_ID,
@@ -141,10 +140,10 @@ class ShizukuBootService : Service() {
         manager.createNotificationChannel(
             NotificationChannel(
                 SHIZUKU_BOOT_CHANNEL_ID,
-                getString(R.string.shizuku_boot_channel),
+                getString(R.string.shizuku_mode),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = getString(R.string.shizuku_boot_channel_description)
+                description = getString(R.string.shizuku_mode_description)
                 setShowBadge(false)
             },
         )
