@@ -3,7 +3,6 @@ package dev.busung.s25uroot
 import android.app.Application
 import android.content.Context
 import android.content.Intent
-import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -20,10 +19,10 @@ internal data class PostRootResult(
  *
  * An already-running Shizuku Binder is the preferred post-root shell bridge.
  * When the Binder is absent, the app-authenticated v0266 root-helper daemon is
- * tried next so the thedjchi/Shizuku root starter does not depend on Wireless
- * ADB. Local ADB remains compatibility-only fallback. Module activation/zygote
- * refresh remains owned by one detached root keeper and the app never replays
- * KernelSU lifecycle stages.
+ * tried next so the Shizuku starter does not depend on Wireless ADB. Local ADB
+ * remains compatibility-only fallback. Module activation/zygote refresh remains
+ * owned by one detached root keeper and the app never replays KernelSU lifecycle
+ * stages.
  */
 internal object PostRootAutomation {
     suspend fun run(
@@ -63,7 +62,7 @@ internal object PostRootAutomation {
 
             var shizukuStarted = ShizukuController.pingUntilRunning(500)
             if (startShizuku && !shizukuStarted) {
-                val start = startShizukuWithRoot(context, helperRoot)
+                val start = startShizukuWithRoot(context, helperRoot, onLog)
                 if (start.exitCode != 0) {
                     val detail = start.output.trim().ifBlank {
                         "root-mode Shizuku starter exit ${start.exitCode}"
@@ -138,7 +137,7 @@ internal object PostRootAutomation {
 
             var shizukuStarted = ShizukuController.pingUntilRunning(500)
             if (startShizuku && !shizukuStarted) {
-                val start = startShizukuWithRoot(context, adbRoot)
+                val start = startShizukuWithRoot(context, adbRoot, onLog)
                 if (start.exitCode != 0) {
                     val detail = start.output.trim().ifBlank { "root-mode Shizuku starter exit ${start.exitCode}" }
                     onLog("[-] ${context.getString(R.string.postroot_shizuku_failed, detail.takeLast(180))}")
@@ -268,31 +267,32 @@ internal object PostRootAutomation {
     }
 
     /**
-     * thedjchi/Shizuku root mode executes Starter.internalCommand directly:
-     * nativeLibraryDir/libshizuku.so --apk=<sourceDir>. Do not fall back to the
-     * external-storage start.sh used by older/original Shizuku distributions.
+     * Use the same starter policy as early boot: current native libshizuku.so
+     * first, then the documented legacy start.sh only when needed. This keeps
+     * post-root recovery compatible without making Wireless ADB a dependency.
      */
-    private fun startShizukuWithRoot(
+    private suspend fun startShizukuWithRoot(
         context: Context,
         rootShell: (String) -> LocalAdbClient.ShellResult,
+        onLog: (String) -> Unit,
     ): LocalAdbClient.ShellResult {
-        val appInfo = runCatching {
-            context.packageManager.getApplicationInfo(SHIZUKU_PACKAGE, 0)
-        }.getOrNull()
-
-        if (appInfo != null) {
-            val starter = File(appInfo.nativeLibraryDir, "libshizuku.so")
-            if (starter.isFile && appInfo.sourceDir.isNotBlank()) {
-                val command =
-                    "${shellQuote(starter.absolutePath)} --apk=${shellQuote(appInfo.sourceDir)}"
-                return rootShell(command)
-            }
-        }
-
-        return LocalAdbClient.ShellResult(
-            44,
-            "thedjchi/Shizuku root starter unavailable: $SHIZUKU_PACKAGE/libshizuku.so",
+        val outcome = ShizukuStarter.start(
+            context = context,
+            shell = rootShell,
+            binderTimeoutMillis = SHIZUKU_BINDER_TIMEOUT_MILLIS,
+            onLog = onLog,
         )
+        return if (outcome.started) {
+            LocalAdbClient.ShellResult(
+                0,
+                "Shizuku started via ${outcome.method ?: "compatible starter"}",
+            )
+        } else {
+            LocalAdbClient.ShellResult(
+                44,
+                outcome.detail.ifBlank { "no compatible Shizuku starter produced a Binder" },
+            )
+        }
     }
 
     private fun finishPostRoot(
@@ -352,7 +352,6 @@ internal object PostRootAutomation {
 
     private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
 
-    private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
-    private const val SHIZUKU_ALREADY_RUNNING_PROBE_MILLIS = 750L
+    private const val SHIZUK_ALREADY_RUNNING_PROBE_MILLIS = 750L
     private const val SHIZUKU_BINDER_TIMEOUT_MILLIS = 12_000L
 }
