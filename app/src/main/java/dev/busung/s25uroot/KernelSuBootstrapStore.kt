@@ -52,12 +52,9 @@ internal object KernelSuBootstrapStore {
             require(fileMatchesArtifact(temporary, artifact)) {
                 "KernelSU bootstrap copy failed final verification"
             }
-            if (destination.exists()) require(destination.delete()) {
-                "Unable to replace stale KernelSU bootstrap source"
-            }
-            require(temporary.renameTo(destination)) {
-                "Unable to publish KernelSU bootstrap source"
-            }
+            // Linux rename(2) replaces an existing destination atomically, so
+            // readers never observe a missing/partial bootstrap source.
+            Os.rename(temporary.absolutePath, destination.absolutePath)
             Os.chmod(destination.absolutePath, 0b111101101)
             require(fileMatchesArtifact(destination, artifact)) {
                 "Published KernelSU bootstrap source failed verification"
