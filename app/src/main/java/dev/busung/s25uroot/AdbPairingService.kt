@@ -29,8 +29,8 @@ import java.net.ConnectException
  * 2. The user enables Wireless Debugging and opens "Pair device with pairing code".
  * 3. The notification accepts the six-digit pairing code.
  * 4. The service performs TLS + SPAKE2 pairing with adbd.
- * 5. If KernelSU is already active, it immediately finishes the one-time setup:
- *    local ADB reconnect, WRITE_SECURE_SETTINGS self-grant and Shizuku startup.
+ * 5. Wireless Debugging is forced off as soon as pairing ends.
+ * 6. If KernelSU is already active, it immediately finishes the one-time setup.
  */
 class AdbPairingService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -63,6 +63,7 @@ class AdbPairingService : Service() {
             }
             ACTION_STOP -> {
                 stopSearch()
+                TemporaryWirelessAdb.forceDisable(this)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -115,6 +116,11 @@ class AdbPairingService : Service() {
 
     private suspend fun handleResult(success: Boolean, exception: Throwable?) {
         stopSearch()
+
+        // The pairing UI requires Wireless Debugging, but RMG never leaves it
+        // enabled after the pairing transaction itself has completed.
+        TemporaryWirelessAdb.forceDisable(this)
+
         val title: String
         var text: String
         if (success) {
@@ -123,10 +129,6 @@ class AdbPairingService : Service() {
             title = getString(R.string.adb_pair_success_title)
             text = getString(R.string.adb_pair_success_text)
 
-            // The normal first pairing is requested by PostRootAutomation after
-            // root is already verified. Complete the bootstrap immediately so
-            // the user does not need another reboot just to obtain the persisted
-            // WRITE_SECURE_SETTINGS grant and start Shizuku for the first time.
             if (NativeProbe.isKernelSuActive() && AppPreferences.autoStartShizukuAfterRoot(this)) {
                 val postRoot = runCatching {
                     PostRootAutomation.run(
@@ -236,6 +238,7 @@ class AdbPairingService : Service() {
 
     override fun onDestroy() {
         stopSearch()
+        TemporaryWirelessAdb.forceDisable(this)
         scope.cancel()
         super.onDestroy()
     }
