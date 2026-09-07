@@ -180,7 +180,10 @@ class AutoRootService : Service() {
             }
 
             if (isExactCzg3(DeviceSnapshot.current())) {
-                DiagnosticUptime.waitUntil(AppPreferences.czg3BootMinUptimeSeconds(this))
+                // Auto Root has its own conservative floor. Do not reuse the
+                // Manual "Diagnostic Launch Time" preference: changing automatic
+                // boot latency must not silently change Manual Standalone behavior.
+                DiagnosticUptime.waitUntil(AppPreferences.autoRootBootMinUptimeSeconds(this))
             } else {
                 delay(LEGACY_STABILIZATION_DELAY_MILLIS)
             }
