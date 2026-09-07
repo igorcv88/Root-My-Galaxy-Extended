@@ -93,6 +93,10 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
+    // Local JVM tests otherwise receive Android's stub org.json classes, whose
+    // methods throw RuntimeException("Method ... not mocked"). SupportManifest
+    // deliberately uses org.json in production, so test its real semantics here.
+    testImplementation("org.json:json:20250517")
     androidTestImplementation("androidx.test:core-ktx:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
