@@ -42,25 +42,36 @@ internal class AutoRootRunner(
         onStage(AutoRootStage.LoadingKernelSu)
         val autoLoaded = waitForAutoLateLoad()
 
-        // Refresh the persistent copy on every successful bootstrap. This is
-        // intentionally after the exploit: app-private files cannot be staged
-        // into /data/local/tmp before root without making Auto Root depend on
-        // ADB/Shizuku. The refreshed copy is what the UMH helper can consume on
-        // the next full boot.
-        stageKernelSu(payloads)
-
         if (autoLoaded) {
+            // v0266 has already crossed the success boundary: the helper loaded
+            // KernelSU in kernel/root context before the app regains control.
+            // Verify that state first. Refreshing the persistent ksud copy is only
+            // maintenance for the next full boot and must never convert this
+            // verified root into a failed run.
             onLog("[+] KernelSU auto-late-load verified; skipped duplicate late-load")
-        } else {
-            onLog("[!] KernelSU auto-late-load not ready; using client fallback")
-            val lateLoad = runHelper("--late-load")
-            require(lateLoad.code == 0) {
-                context.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
-            }
-            if (lateLoad.output.isNotBlank()) onLog(lateLoad.output)
+            onStage(AutoRootStage.VerifyingRoot)
+            verifyKernelSu()
+            refreshKernelSuBestEffort(payloads)
+            return
         }
 
+        // Auto-late-load did not become active, so staging is required before the
+        // historical client late-load fallback can run. Use atomic replacement so
+        // an older ksud daemon can keep its executable inode open without causing
+        // cp(1) to fail with ETXTBSY / "Text file busy".
+        onLog("[!] KernelSU auto-late-load not ready; using client fallback")
+        stageKernelSuRequired(payloads)
+        val lateLoad = runHelper("--late-load")
+        require(lateLoad.code == 0) {
+            context.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
+        }
+        if (lateLoad.output.isNotBlank()) onLog(lateLoad.output)
+
         onStage(AutoRootStage.VerifyingRoot)
+        verifyKernelSu()
+    }
+
+    private suspend fun verifyKernelSu() {
         val verification = runCatching { runHelper("--ksu-info") }.getOrNull()
         val nativeActive = NativeProbe.isKernelSuActive()
         require(verification?.code == 0 || nativeActive) {
@@ -192,15 +203,41 @@ internal class AutoRootRunner(
         onLog(context.getString(R.string.log_bootstrap_root))
     }
 
-    private suspend fun stageKernelSu(payloads: VerifiedPayloads) {
-        val source = shellQuote(payloads.kernelSu.absolutePath)
-        val stageCommand =
-            "/system/bin/cp $source $KSUD_PATH && " +
-                "/system/bin/cp $source $KSUD_STAGE_PATH && " +
-                "/system/bin/chmod 755 $KSUD_PATH $KSUD_STAGE_PATH"
-        val stage = runHelper("-c", stageCommand)
+    private suspend fun stageKernelSuRequired(payloads: VerifiedPayloads) {
+        val stage = stageKernelSuAtomically(payloads)
         require(stage.code == 0) { context.getString(R.string.error_ksu_stage, stage.output) }
         onLog(context.getString(R.string.log_ksu_staged))
+    }
+
+    private suspend fun refreshKernelSuBestEffort(payloads: VerifiedPayloads) {
+        val stage = runCatching { stageKernelSuAtomically(payloads) }.getOrElse { error ->
+            onLog(
+                "[!] Root is verified, but persistent KernelSU refresh failed: " +
+                    (error.message ?: error.javaClass.simpleName),
+            )
+            return
+        }
+        if (stage.code == 0) {
+            onLog(context.getString(R.string.log_ksu_staged))
+        } else {
+            onLog(
+                "[!] Root is verified, but persistent KernelSU refresh failed: " +
+                    stage.output.trim().takeLast(240),
+            )
+        }
+    }
+
+    private suspend fun stageKernelSuAtomically(payloads: VerifiedPayloads): AutoRootCommandResult {
+        val source = shellQuote(payloads.kernelSu.absolutePath)
+        val stageCommand =
+            "set -e; " +
+                "tmp='$KSUD_REFRESH_PATH'; rm -f \"\$tmp\"; " +
+                "/system/bin/cp $source \"\$tmp\"; /system/bin/chmod 755 \"\$tmp\"; " +
+                "/system/bin/mv -f \"\$tmp\" $KSUD_PATH; " +
+                "tmp='$KSUD_STAGE_REFRESH_PATH'; rm -f \"\$tmp\"; " +
+                "/system/bin/cp $source \"\$tmp\"; /system/bin/chmod 755 \"\$tmp\"; " +
+                "/system/bin/mv -f \"\$tmp\" $KSUD_STAGE_PATH"
+        return runHelper("-c", stageCommand)
     }
 
     private fun helperFile() =
@@ -299,6 +336,8 @@ internal class AutoRootRunner(
         private const val P0_OFFSET_MASK = 0xffffL
         private const val KSUD_PATH = "/data/local/tmp/ksud-s25u-kdp"
         private const val KSUD_STAGE_PATH = "/data/local/tmp/.ksud-stage"
+        private const val KSUD_REFRESH_PATH = "/data/local/tmp/.ksud-refresh"
+        private const val KSUD_STAGE_REFRESH_PATH = "/data/local/tmp/.ksud-stage-refresh"
         private val LOG_POLL_INTERVAL = 250.milliseconds
         private val HELPER_POLL_INTERVAL = 250.milliseconds
         private val AUTO_LATE_LOAD_POLL_INTERVAL = 400.milliseconds
