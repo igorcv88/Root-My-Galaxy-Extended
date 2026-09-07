@@ -142,6 +142,12 @@
     <string name="advanced_mode_description">Manually choose a device-compatible payload during installation</string>
     <string name="shizuku_mode">Use Shizuku</string>
     <string name="shizuku_mode_description">Use Shizuku to run the payload. This can improve reliability.</string>
+    <string name="shizuku_boot_section">Shizuku startup</string>
+    <string name="shizuku_boot_title">Start Shizuku on boot</string>
+    <string name="shizuku_boot_description">RMG waits for any Wi-Fi and starts Shizuku without delaying Auto Root. Other boot starters such as Shizuku or Tasker are supported as redundancy, but using one primary starter avoids duplicate races.</string>
+    <string name="shizuku_boot_waiting">Waiting for Wi-Fi or an existing Shizuku Binder</string>
+    <string name="shizuku_boot_auth_token">Automation auth token</string>
+    <string name="shizuku_boot_auth_token_description">Optional Intent fallback. Copy the token from Shizuku → Control Shizuku with automation apps.</string>
     <string name="shizuku_not_running_title">Shizuku is not running</string>
     <string name="shizuku_not_running_body">Start the Shizuku service with adb or root and grant this app permission, then enable this option.</string>
     <string name="action_download_shizuku">Download Shizuku</string>
