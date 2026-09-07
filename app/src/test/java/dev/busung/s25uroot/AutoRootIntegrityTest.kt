@@ -2,6 +2,7 @@ package dev.busung.s25uroot
 
 import java.io.File
 import java.security.MessageDigest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -60,6 +61,12 @@ class AutoRootIntegrityTest {
         assertFalse(shouldRunForBoot("boot-b", null))
         assertFalse(shouldRunForBoot("boot-b", ""))
         assertFalse(shouldRunForBoot("", "boot-a"))
+    }
+
+    @Test
+    fun manualAndAutoRootLaunchDefaultsStayIndependent() {
+        assertEquals(120, DiagnosticUptime.DEFAULT_SECONDS)
+        assertEquals(60, DiagnosticUptime.AUTO_ROOT_DEFAULT_SECONDS)
     }
 
     private fun artifactFor(file: File): RemoteArtifact = RemoteArtifact(
