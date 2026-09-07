@@ -66,6 +66,10 @@
     <string name="export_log">Export log</string>
     <string name="export_log_saved">Log saved</string>
     <string name="export_log_failed">Unable to save the log</string>
+    <string name="history_export_all" translatable="false">Export all logs</string>
+    <string name="history_export_selected" translatable="false">Export selected logs</string>
+    <string name="export_logs_saved" translatable="false">Saved %1$d logs</string>
+    <string name="export_logs_failed" translatable="false">Unable to save logs</string>
     <string name="about">About</string>
     <string name="about_title">About Root My Galaxy</string>
     <string name="about_description">About Root My Galaxy</string>
