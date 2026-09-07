@@ -9,6 +9,7 @@
     <string name="adb_pair_working" translatable="false">Pairing…</string>
     <string name="adb_pair_success_title" translatable="false">Wireless ADB paired</string>
     <string name="adb_pair_success_text" translatable="false">The persistent local ADB key is ready for post-root automation.</string>
+    <string name="adb_pair_success_shizuku" translatable="false">Persistent local ADB is ready and Shizuku started successfully.</string>
     <string name="adb_pair_failed_title" translatable="false">Wireless ADB pairing failed</string>
     <string name="adb_pair_cannot_connect" translatable="false">Could not connect to the pairing port</string>
     <string name="adb_pair_wrong_code" translatable="false">The pairing code was incorrect</string>
