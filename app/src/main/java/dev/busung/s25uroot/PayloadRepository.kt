@@ -29,6 +29,9 @@ class PayloadRepository(private val context: Context) {
                         url = pinArtifactUrl(profile.kernelSu.artifact.url, commit),
                     ),
                 ),
+                rootHelper = profile.rootHelper?.copy(
+                    url = pinArtifactUrl(profile.rootHelper.url, commit),
+                ),
             )
         }
     }
@@ -52,6 +55,8 @@ class PayloadRepository(private val context: Context) {
     }
 
     fun download(profile: TargetProfile, onProgress: (String) -> Unit): VerifiedPayloads {
+        verifyBundledRootHelper(profile)
+
         if (profile.source == PayloadSource.Offline) {
             onProgress("Payload source: last-known-good offline cache")
             return KnownGoodPayloadStore.load(context, profile.profileId)
@@ -78,6 +83,34 @@ class PayloadRepository(private val context: Context) {
         Os.chmod(exploit.absolutePath, 0b100100100)
         Os.chmod(kernelSu.absolutePath, 0b100100100)
         return VerifiedPayloads(profile, exploit, kernelSu, PayloadSource.Online)
+    }
+
+    private fun verifyBundledRootHelper(profile: TargetProfile) {
+        val expected = profile.rootHelper ?: return
+        val helper = File(context.applicationInfo.nativeLibraryDir, ROOT_HELPER_LIBRARY)
+        require(helper.isFile) {
+            "The required root helper is not bundled in this app build"
+        }
+        require(helper.length() == expected.size) {
+            "This app contains an outdated root helper; update Root My Galaxy before running this payload"
+        }
+        val actual = sha256(helper)
+        require(actual == expected.sha256) {
+            "This app contains an outdated root helper; update Root My Galaxy before running this payload"
+        }
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun downloadArtifact(
@@ -188,6 +221,7 @@ class PayloadRepository(private val context: Context) {
         private const val MUTABLE_RAW_PREFIX = "$RAW_REPOSITORY/main/"
         private const val MAX_COMMIT_RESPONSE_BYTES = 16 * 1024
         private const val MAX_MANIFEST_BYTES = 256 * 1024
+        private const val ROOT_HELPER_LIBRARY = "libcve43499root.so"
 
         fun offlineRequest(profileId: String?): String =
             OFFLINE_REQUEST_PREFIX + profileId.orEmpty()
