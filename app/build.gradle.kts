@@ -59,6 +59,11 @@ android {
 
     packaging {
         jniLibs.useLegacyPackaging = true
+        // The v0266 feed binds execution to the exact root-helper artifact hash.
+        // AGP normally strips packaged JNI ELF files in release builds, which
+        // changes this helper's bytes after the workflow has verified them.
+        // Keep this one artifact byte-for-byte identical to the published feed.
+        jniLibs.keepDebugSymbols += "**/libcve43499root.so"
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
 }
