@@ -39,6 +39,7 @@ object AppPreferences {
     private const val AUTO_START_SHIZUKU_AFTER_ROOT = "auto_start_shizuku_after_root"
     private const val ADB_PAIRED = "adb_paired"
     private const val CZG3_BOOT_MIN_UPTIME_SEC = "czg3_boot_min_uptime_sec"
+    private const val AUTO_ROOT_BOOT_MIN_UPTIME_SEC = "auto_root_boot_min_uptime_sec"
     private const val CONSUMED_INSTALL_REQUEST = "consumed_install_request"
 
     fun accentColor(context: Context): AccentColor = AccentColor.fromStoredValue(
@@ -99,6 +100,7 @@ object AppPreferences {
         prefs(context).edit().putBoolean(ADB_PAIRED, paired).apply()
     }
 
+    /** Manual Online/Offline launch gate. */
     fun czg3BootMinUptimeSeconds(context: Context): Int = DiagnosticUptime.normalize(
         prefs(context).getInt(CZG3_BOOT_MIN_UPTIME_SEC, DiagnosticUptime.DEFAULT_SECONDS),
     )
@@ -106,6 +108,24 @@ object AppPreferences {
     fun setCzg3BootMinUptimeSeconds(context: Context, seconds: Int) {
         prefs(context).edit()
             .putInt(CZG3_BOOT_MIN_UPTIME_SEC, DiagnosticUptime.normalize(seconds))
+            .apply()
+    }
+
+    /**
+     * Auto Root has an independent total-uptime floor. Keeping this separate is
+     * intentional: changing the automatic boot policy must not silently alter
+     * Manual Standalone/Online/Offline behavior or the Advanced diagnostic knob.
+     */
+    fun autoRootBootMinUptimeSeconds(context: Context): Int = DiagnosticUptime.normalize(
+        prefs(context).getInt(
+            AUTO_ROOT_BOOT_MIN_UPTIME_SEC,
+            DiagnosticUptime.AUTO_ROOT_DEFAULT_SECONDS,
+        ),
+    )
+
+    fun setAutoRootBootMinUptimeSeconds(context: Context, seconds: Int) {
+        prefs(context).edit()
+            .putInt(AUTO_ROOT_BOOT_MIN_UPTIME_SEC, DiagnosticUptime.normalize(seconds))
             .apply()
     }
 
