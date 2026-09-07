@@ -41,11 +41,18 @@ internal class AutoRootRunner(
 
         onStage(AutoRootStage.LoadingKernelSu)
         val autoLoaded = waitForAutoLateLoad()
+
+        // Refresh the persistent copy on every successful bootstrap. This is
+        // intentionally after the exploit: app-private files cannot be staged
+        // into /data/local/tmp before root without making Auto Root depend on
+        // ADB/Shizuku. The refreshed copy is what the UMH helper can consume on
+        // the next full boot.
+        stageKernelSu(payloads)
+
         if (autoLoaded) {
-            onLog("[+] KernelSU auto-late-load verified; no client handoff required")
+            onLog("[+] KernelSU auto-late-load verified; skipped duplicate late-load")
         } else {
             onLog("[!] KernelSU auto-late-load not ready; using client fallback")
-            stageKernelSu(payloads)
             val lateLoad = runHelper("--late-load")
             require(lateLoad.code == 0) {
                 context.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
