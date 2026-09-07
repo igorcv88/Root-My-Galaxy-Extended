@@ -53,7 +53,7 @@ Compared with the base Root My Galaxy app, this fork currently adds or changes:
 - v0266 root-helper auto-late-load support with app-side late-load fallback;
 - persistent local Wireless ADB pairing and automatic Shizuku restart after root;
 - a KernelSU userspace lifecycle soft reboot route (`post-fs-data → services → boot-completed → zygote restart`);
-- installation History with captured logs and per-run export.
+- installation History with captured logs, per-run export and ZIP export of all or selected completed runs.
 
 The exploit race itself remains deliberately small: the app does not reintroduce the former External Observer, pselect gate, SIGRETURN interception, syscall wrappers or race telemetry into the critical path.
 
@@ -164,7 +164,7 @@ Offline cache IDs include the exploit, KernelSU and helper digests. Legacy cache
 
 History records manual and automatic runs, selected profile, result and captured runtime log. The critical exploit path does not continuously fsync History during the race; terminal state is persisted outside the sensitive race window.
 
-Open an individual run to export its log. Bulk selected/all-log export is being restored separately and is not required for root execution.
+Open an individual run and use **Save** to export that run as a plain `.log`. On the History list, **Save** with no selection exports every completed run into one ZIP. Long-press runs to enter selection mode, then use **Save** to export only the selected logs into a ZIP. Running entries are excluded from bulk export so the archive contains stable snapshots.
 
 ## Building
 
