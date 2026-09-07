@@ -39,6 +39,19 @@ class PostRootModuleKeeperTest {
     }
 
     @Test
+    fun keeperPublishesStartHandshakeBeforeReadinessWaits() {
+        val script = PostRootModuleKeeper.buildKeeperScript(
+            "11111111-2222-3333-4444-555555555555",
+        )
+
+        val startMarker = script.indexOf(PostRootModuleKeeper.START_MARKER)
+        val bootCompletedWait = script.indexOf("sys.boot_completed")
+        assertTrue(startMarker >= 0)
+        assertTrue(bootCompletedWait > startMarker)
+        assertTrue(script.contains("keeper process started"))
+    }
+
+    @Test
     fun keeperGuardsMetaOverlayfsxViperSafeBeforeZygote() {
         val script = PostRootModuleKeeper.buildKeeperScript(
             "11111111-2222-3333-4444-555555555555",
