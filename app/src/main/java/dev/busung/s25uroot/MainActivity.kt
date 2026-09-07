@@ -932,10 +932,33 @@ private fun HistoryPage(
     history: List<InstallHistoryEntry>,
     onDeleteEntries: (Set<String>) -> Unit,
 ) {
+    val context = LocalContext.current
     val view = LocalView.current
     var selectedHistoryId by remember { mutableStateOf<String?>(null) }
     var selectionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingDeleteIds by remember { mutableStateOf<Set<String>?>(null) }
+    var pendingExportEntries by remember { mutableStateOf<List<InstallHistoryEntry>>(emptyList()) }
+    val exportLogsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val entries = pendingExportEntries
+        pendingExportEntries = emptyList()
+        result.data?.data?.let { uri ->
+            if (entries.isNotEmpty()) HistoryLogExporter.save(context, uri, entries)
+        }
+    }
+    val launchExport: (List<InstallHistoryEntry>) -> Unit = { entries ->
+        if (entries.isNotEmpty()) {
+            pendingExportEntries = entries.toList()
+            exportLogsLauncher.launch(
+                Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_TITLE, HistoryLogExporter.archiveFileName(entries))
+                },
+            )
+        }
+    }
     val selectedEntry = history.firstOrNull { it.id == selectedHistoryId }
     val selectableIds = history
         .filter { it.result != InstallRunResult.Running }
@@ -1008,6 +1031,12 @@ private fun HistoryPage(
                 onClearSelection = { selectionIds = emptySet() },
                 onEntryClick = { selectedHistoryId = it.id },
                 onDeleteSelected = { pendingDeleteIds = selectionIds },
+                onExportAll = {
+                    launchExport(history.filter { it.result != InstallRunResult.Running })
+                },
+                onExportSelected = {
+                    launchExport(history.filter { it.id in selectionIds })
+                },
             )
         } else {
             HistoryDetail(
@@ -1030,6 +1059,8 @@ private fun HistoryList(
     onClearSelection: () -> Unit,
     onEntryClick: (InstallHistoryEntry) -> Unit,
     onDeleteSelected: () -> Unit,
+    onExportAll: () -> Unit,
+    onExportSelected: () -> Unit,
 ) {
     val view = LocalView.current
     val selecting = selectionIds.isNotEmpty()
@@ -1058,12 +1089,32 @@ private fun HistoryList(
                             style = MaterialTheme.typography.headlineLarge,
                         )
                     }
+                    if (!selecting && selectableIds.isNotEmpty()) {
+                        IconButton(onClick = {
+                            clickHaptic(view)
+                            onExportAll()
+                        }) {
+                            Icon(
+                                Icons.Rounded.Save,
+                                contentDescription = stringResource(R.string.history_export_all),
+                            )
+                        }
+                    }
                     AnimatedVisibility(
                         visible = selecting,
                         enter = fadeIn() + scaleIn(initialScale = 0.9f),
                         exit = fadeOut() + scaleOut(targetScale = 0.9f),
                     ) {
                         Row {
+                            IconButton(onClick = {
+                                clickHaptic(view)
+                                onExportSelected()
+                            }) {
+                                Icon(
+                                    Icons.Rounded.Save,
+                                    contentDescription = stringResource(R.string.history_export_selected),
+                                )
+                            }
                             IconButton(onClick = {
                                 clickHaptic(view)
                                 onSelectAll()
