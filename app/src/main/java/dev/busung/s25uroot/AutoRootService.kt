@@ -174,7 +174,8 @@ class AutoRootService : Service() {
 
             if (NativeProbe.isKernelSuActive()) {
                 AutoRootSupport.markVerifiedForBoot(this, initialBootToken)
-                finishWithResult(getString(R.string.autoroot_root_restored))
+                Log.i(TAG, "Auto Root skipped: KernelSU already active for this kernel boot")
+                stopWithoutResult()
                 return
             }
 
@@ -195,7 +196,8 @@ class AutoRootService : Service() {
 
             if (NativeProbe.isKernelSuActive()) {
                 AutoRootSupport.markVerifiedForBoot(this, bootToken)
-                finishWithResult(getString(R.string.autoroot_root_restored))
+                Log.i(TAG, "Auto Root skipped after stabilization: KernelSU already active")
+                stopWithoutResult()
                 return
             }
 
