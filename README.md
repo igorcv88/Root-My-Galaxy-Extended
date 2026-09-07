@@ -49,7 +49,7 @@ Compared with the base Root My Galaxy app, this fork currently adds or changes:
 - a last-known-good offline payload set published only after a successful verified Manual Online root;
 - **Auto Root** that is always Offline + Standalone and never depends on Shizuku or network access to acquire root;
 - a foreground boot gate plus a fresh `:autoroot_exec` process for the exploit handoff;
-- configurable total boot-uptime launch gate (default 120 s on CZG3);
+- an independent Auto Root total-uptime floor (default 60 s on CZG3) while Manual keeps its own diagnostic launch setting;
 - v0266 root-helper auto-late-load support with app-side late-load fallback;
 - persistent local Wireless ADB pairing and automatic Shizuku restart after root;
 - a **single-owner root-side module keeper** that does not replay KernelSU lifecycle stages and performs at most one guarded zygote respawn per kernel boot;
@@ -107,7 +107,7 @@ BOOT_COMPLETED
       ↓
 foreground gate service
       ↓
-wait for configured total boot uptime
+wait only for the dedicated Auto Root total-uptime floor
       ↓
 bind fresh :autoroot_exec process
       ↓
@@ -122,15 +122,17 @@ post-root automation / detached keeper
 
 It never chooses Shizuku automatically for root acquisition, never downloads a payload and runs at most once per full kernel boot. A soft/userspace reboot keeps the same `/proc/sys/kernel/random/boot_id`; duplicate `BOOT_COMPLETED` events for that same kernel boot are consumed and any stale Auto Root foreground service/notification is torn down instead of launching another exploit.
 
-## Launch uptime
+### Launch uptime
 
-For exact CZG3, **Diagnostic Launch Time** is now only a historical UI name. It performs no diagnostics. It is a minimum total boot uptime measured with `SystemClock.elapsedRealtime()`.
+The Manual and Auto Root launch policies are intentionally separated.
 
-Available values: `0 / 30 / 60 / 90 / 120 / 180 / 300 / 600` seconds. Default: **120 s**.
+For exact CZG3, the manual **Diagnostic Launch Time** is only a historical UI name. It performs no diagnostics; it is a minimum total boot uptime measured with `SystemClock.elapsedRealtime()`. Available values remain `0 / 30 / 60 / 90 / 120 / 180 / 300 / 600` seconds, with the established Manual default of **120 s**.
+
+Auto Root does **not** reuse that manual preference anymore. It has its own conservative default floor of **60 s total kernel uptime**. This is not a fixed 60-second sleep after `BOOT_COMPLETED`: only the remaining time to 60 s is waited. The choice deliberately keeps a modest post-boot stabilization margin for the still-racy FOPS stage while removing the former 120 s automatic wait. The new KernelSU bootstrap pre-stage/auto-late-load path is independent of this delay and does not require 120 s.
 
 ## Wireless ADB and Shizuku without Tasker
 
-Root acquisition never depends on Wireless ADB or Shizuku. They are post-root features only.
+Root acquisition never depends on Wireless ADB, Shizuku or `WRITE_SECURE_SETTINGS`. They are post-root features only.
 
 The app now contains a local ADB client and a persistent ADB key. One-time setup uses Android Wireless Debugging pairing (TLS + SPAKE2). On Android 13+, the app first requests notification access from a visible activity because the six-digit pairing code is entered through the pairing foreground-service notification.
 
@@ -142,6 +144,8 @@ After the first successful pairing/root bootstrap, the app uses KernelSU shell r
 4. verify `su -c id` through KernelSU `--allow-shell`;
 5. execute Shizuku's official `start.sh`;
 6. wait for the Shizuku Binder to become available.
+
+If `WRITE_SECURE_SETTINGS` is missing and Wireless Debugging is already enabled, the post-root flow can still connect and self-grant the permission for future boots. If Wireless Debugging is disabled, the app cannot turn it on locally without that permission, so Shizuku/module-refresh automation may be skipped for that run even though exploit + KernelSU root already succeeded. That condition must never be interpreted as a root-acquisition failure.
 
 If pairing is missing during Auto Root, root still succeeds; the post-root step records that pairing is required instead of turning the exploit result into failure.
 
