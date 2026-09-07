@@ -352,6 +352,6 @@ internal object PostRootAutomation {
 
     private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
 
-    private const val SHIZUK_ALREADY_RUNNING_PROBE_MILLIS = 750L
+    private const val SHIZUKU_ALREADY_RUNNING_PROBE_MILLIS = 750L
     private const val SHIZUKU_BINDER_TIMEOUT_MILLIS = 12_000L
 }
