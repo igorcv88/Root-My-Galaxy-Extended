@@ -67,34 +67,37 @@ jobs:
       - name: Sincronizar root helper do payload CZG3
         run: |
           set -euo pipefail
+
+          # Do not resolve the companion payload repository through the anonymous
+          # REST API. GitHub-hosted runners share anonymous API quotas and can hit
+          # HTTP 403 before the build even starts. A shallow public git clone pins
+          # main to one exact commit without consuming the REST/raw API quota.
+          PAYLOAD_CHECKOUT="$RUNNER_TEMP/root-my-galaxy-payloads"
+          rm -rf "$PAYLOAD_CHECKOUT"
+          git clone --quiet --depth=1 --branch main \
+            "https://github.com/${PAYLOAD_REPO}.git" \
+            "$PAYLOAD_CHECKOUT"
+
+          PAYLOAD_COMMIT="$(git -C "$PAYLOAD_CHECKOUT" rev-parse HEAD)"
+          if [[ ! "$PAYLOAD_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Payload repository returned an invalid main commit SHA: $PAYLOAD_COMMIT" >&2
+            exit 1
+          fi
+          export PAYLOAD_CHECKOUT PAYLOAD_COMMIT
+
           python3 - <<'PY'
           import hashlib
           import json
           import os
           import pathlib
-          import urllib.request
 
           repo = os.environ["PAYLOAD_REPO"]
-          api = f"https://api.github.com/repos/{repo}/git/ref/heads/main"
-          request = urllib.request.Request(
-              api,
-              headers={"User-Agent": "Root-My-Galaxy-release"},
-          )
-          with urllib.request.urlopen(request, timeout=30) as response:
-              ref = json.load(response)
-          commit = ref["object"]["sha"]
-          if len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit):
-              raise SystemExit("Payload repository returned an invalid main commit SHA")
-
-          raw_root = f"https://raw.githubusercontent.com/{repo}/{commit}"
-          with urllib.request.urlopen(
-              urllib.request.Request(
-                  f"{raw_root}/support/targets-v3.json",
-                  headers={"User-Agent": "Root-My-Galaxy-release"},
-              ),
-              timeout=30,
-          ) as response:
-              manifest = json.load(response)
+          commit = os.environ["PAYLOAD_COMMIT"]
+          checkout = pathlib.Path(os.environ["PAYLOAD_CHECKOUT"])
+          manifest_path = checkout / "support/targets-v3.json"
+          if not manifest_path.is_file():
+              raise SystemExit(f"Payload manifest is missing: {manifest_path}")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
           targets = [
               target for target in manifest.get("payloads", [])
@@ -125,24 +128,20 @@ jobs:
               )
               synced = "false"
           else:
-              mutable_prefix = (
-                  f"https://raw.githubusercontent.com/{repo}/main/"
-              )
+              mutable_prefix = f"https://raw.githubusercontent.com/{repo}/main/"
               url = helper.get("url", "")
               if not url.startswith(mutable_prefix):
                   raise SystemExit(f"Unexpected rootHelper URL: {url}")
               path = url.removeprefix(mutable_prefix)
               if not path.startswith("artifacts/pa3q-S938BXXSBCZG3-v0266/"):
                   raise SystemExit(f"Unexpected CZG3 rootHelper path: {path}")
-              pinned_url = f"{raw_root}/{path}"
-              with urllib.request.urlopen(
-                  urllib.request.Request(
-                      pinned_url,
-                      headers={"User-Agent": "Root-My-Galaxy-release"},
-                  ),
-                  timeout=60,
-              ) as response:
-                  data = response.read()
+
+              source = checkout / path
+              if not source.is_file():
+                  raise SystemExit(
+                      f"rootHelper is missing from pinned payload commit {commit}: {path}"
+                  )
+              data = source.read_bytes()
 
               expected_size = int(helper["size"])
               expected_sha = str(helper["sha256"]).lower()
@@ -164,6 +163,8 @@ jobs:
               env.write(f"ROOT_HELPER_SHA256={digest}\n")
               env.write(f"ROOT_HELPER_SYNCED={synced}\n")
           PY
+
+          rm -rf "$PAYLOAD_CHECKOUT"
 
       - name: Verificar regras do Auto Root
         run: |
