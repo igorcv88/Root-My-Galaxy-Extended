@@ -86,7 +86,7 @@ object AppPreferences {
     }
 
     fun autoStartShizukuAfterRoot(context: Context): Boolean =
-        prefs(context).getBoolean(AUTO_START_SHIZUKU_AFTER_ROOT, false)
+        prefs(context).getBoolean(AUTO_START_SHIZUKU_AFTER_ROOT, true)
 
     fun setAutoStartShizukuAfterRoot(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(AUTO_START_SHIZUKU_AFTER_ROOT, enabled).apply()
