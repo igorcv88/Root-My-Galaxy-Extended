@@ -25,11 +25,12 @@ import java.net.ConnectException
  * notification with RemoteInput.
  *
  * Flow:
- * 1. User taps "Pair" in settings → service starts, discovers pairing port via mDNS
- * 2. Notification appears: "Enter pairing code" with a text input field
- * 3. User opens Wireless Debugging → "Pair device with pairing code" → enters code in notification
- * 4. Service performs TLS + SPAKE2 pairing with adbd
- * 5. Success/failure reported via notification
+ * 1. Post-root automation starts the service when no saved local ADB key exists.
+ * 2. The user enables Wireless Debugging and opens "Pair device with pairing code".
+ * 3. The notification accepts the six-digit pairing code.
+ * 4. The service performs TLS + SPAKE2 pairing with adbd.
+ * 5. If KernelSU is already active, it immediately finishes the one-time setup:
+ *    local ADB reconnect, WRITE_SECURE_SETTINGS self-grant and Shizuku startup.
  */
 class AdbPairingService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -112,15 +113,34 @@ class AdbPairingService : Service() {
         }
     }
 
-    private fun handleResult(success: Boolean, exception: Throwable?) {
+    private suspend fun handleResult(success: Boolean, exception: Throwable?) {
         stopSearch()
         val title: String
-        val text: String
+        var text: String
         if (success) {
             Log.i(TAG, "Pairing succeeded")
             AppPreferences.setAdbPaired(this, true)
             title = getString(R.string.adb_pair_success_title)
             text = getString(R.string.adb_pair_success_text)
+
+            // The normal first pairing is requested by PostRootAutomation after
+            // root is already verified. Complete the bootstrap immediately so
+            // the user does not need another reboot just to obtain the persisted
+            // WRITE_SECURE_SETTINGS grant and start Shizuku for the first time.
+            if (NativeProbe.isKernelSuActive() && AppPreferences.autoStartShizukuAfterRoot(this)) {
+                val postRoot = runCatching {
+                    PostRootAutomation.run(
+                        context = this@AdbPairingService,
+                        softReboot = false,
+                        startShizuku = true,
+                    ) { line -> Log.i(TAG, line) }
+                }.onFailure { error ->
+                    Log.w(TAG, "Immediate post-pair automation failed", error)
+                }.getOrNull()
+                if (postRoot?.shizukuStarted == true) {
+                    text = getString(R.string.adb_pair_success_shizuku)
+                }
+            }
         } else {
             title = getString(R.string.adb_pair_failed_title)
             text = when (exception) {
