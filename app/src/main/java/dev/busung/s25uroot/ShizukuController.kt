@@ -74,6 +74,22 @@ object ShizukuController {
     }
 
     /**
+     * Execute a short shell command through the already-running Shizuku server.
+     * This is the preferred post-root transport: when Shizuku is already alive
+     * there is no reason to open Wireless ADB merely to obtain another shell UID.
+     */
+    fun shell(command: String): LocalAdbClient.ShellResult {
+        val process = exec(arrayOf("/system/bin/sh", "-c", "$command 2>&1"))
+        return try {
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            val exitCode = process.waitFor()
+            LocalAdbClient.ShellResult(exitCode, output.trim())
+        } finally {
+            if (process.isAlive) process.destroy()
+        }
+    }
+
+    /**
      * Runs a short command and returns its combined output. Used to read files the app
      * process cannot access directly because SELinux confines app UIDs away from the
      * shell-owned /data/local/tmp directory.
