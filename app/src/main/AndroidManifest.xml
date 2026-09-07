@@ -56,6 +56,15 @@
             android:exported="false"
             android:process=":autoroot_exec" />
         <service
+            android:name=".ShizukuBootService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Early local Wireless ADB bootstrap for Shizuku after boot" />
+        </service>
+        <service
             android:name=".AdbPairingService"
             android:enabled="true"
             android:exported="false"
