@@ -36,6 +36,8 @@ object AppPreferences {
     private const val SHIZUKU_MODE = "shizuku_mode"
     private const val AUTO_ROOT_ENABLED = "auto_root_enabled"
     private const val SOFT_REBOOT_AFTER_ROOT = "soft_reboot_after_root"
+    private const val AUTO_START_SHIZUKU_AFTER_ROOT = "auto_start_shizuku_after_root"
+    private const val ADB_PAIRED = "adb_paired"
     private const val CZG3_BOOT_MIN_UPTIME_SEC = "czg3_boot_min_uptime_sec"
     private const val CONSUMED_INSTALL_REQUEST = "consumed_install_request"
 
@@ -44,9 +46,7 @@ object AppPreferences {
     )
 
     fun setAccentColor(context: Context, color: AccentColor) {
-        prefs(context).edit()
-            .putString(ACCENT_COLOR, color.storedValue)
-            .apply()
+        prefs(context).edit().putString(ACCENT_COLOR, color.storedValue).apply()
     }
 
     fun themeMode(context: Context): AppThemeMode = AppThemeMode.fromStoredValue(
@@ -54,45 +54,49 @@ object AppPreferences {
     )
 
     fun setThemeMode(context: Context, themeMode: AppThemeMode) {
-        prefs(context).edit()
-            .putString(THEME_MODE, themeMode.storedValue)
-            .apply()
+        prefs(context).edit().putString(THEME_MODE, themeMode.storedValue).apply()
     }
 
     fun advancedMode(context: Context): Boolean =
         prefs(context).getBoolean(ADVANCED_MODE, false)
 
     fun setAdvancedMode(context: Context, enabled: Boolean) {
-        prefs(context).edit()
-            .putBoolean(ADVANCED_MODE, enabled)
-            .apply()
+        prefs(context).edit().putBoolean(ADVANCED_MODE, enabled).apply()
     }
 
     fun shizukuMode(context: Context): Boolean =
         prefs(context).getBoolean(SHIZUKU_MODE, false)
 
     fun setShizukuMode(context: Context, enabled: Boolean) {
-        prefs(context).edit()
-            .putBoolean(SHIZUKU_MODE, enabled)
-            .apply()
+        prefs(context).edit().putBoolean(SHIZUKU_MODE, enabled).apply()
     }
 
     fun autoRootEnabled(context: Context): Boolean =
         prefs(context).getBoolean(AUTO_ROOT_ENABLED, false)
 
     fun setAutoRootEnabled(context: Context, enabled: Boolean) {
-        prefs(context).edit()
-            .putBoolean(AUTO_ROOT_ENABLED, enabled)
-            .apply()
+        prefs(context).edit().putBoolean(AUTO_ROOT_ENABLED, enabled).apply()
     }
 
     fun softRebootAfterRoot(context: Context): Boolean =
         prefs(context).getBoolean(SOFT_REBOOT_AFTER_ROOT, false)
 
     fun setSoftRebootAfterRoot(context: Context, enabled: Boolean) {
-        prefs(context).edit()
-            .putBoolean(SOFT_REBOOT_AFTER_ROOT, enabled)
-            .apply()
+        prefs(context).edit().putBoolean(SOFT_REBOOT_AFTER_ROOT, enabled).apply()
+    }
+
+    fun autoStartShizukuAfterRoot(context: Context): Boolean =
+        prefs(context).getBoolean(AUTO_START_SHIZUKU_AFTER_ROOT, true)
+
+    fun setAutoStartShizukuAfterRoot(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(AUTO_START_SHIZUKU_AFTER_ROOT, enabled).apply()
+    }
+
+    fun adbPaired(context: Context): Boolean =
+        prefs(context).getBoolean(ADB_PAIRED, false)
+
+    fun setAdbPaired(context: Context, paired: Boolean) {
+        prefs(context).edit().putBoolean(ADB_PAIRED, paired).apply()
     }
 
     fun czg3BootMinUptimeSeconds(context: Context): Int = DiagnosticUptime.normalize(
@@ -110,9 +114,7 @@ object AppPreferences {
         if (requestId.isNullOrBlank()) return false
         val preferences = prefs(context)
         if (preferences.getString(CONSUMED_INSTALL_REQUEST, null) == requestId) return false
-        return preferences.edit()
-            .putString(CONSUMED_INSTALL_REQUEST, requestId)
-            .commit()
+        return preferences.edit().putString(CONSUMED_INSTALL_REQUEST, requestId).commit()
     }
 
     private fun prefs(context: Context) =

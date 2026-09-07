@@ -20,7 +20,8 @@ internal object KnownGoodPayloadStore {
     private const val MANIFEST = "target-v3.json"
     private const val EXPLOIT = "cve-2026-43499-app.so"
     private const val KSUD = "ksud-s25u-kdp"
-    private val CACHE_ID = Regex("v3-[0-9a-f]{16}-[0-9a-f]{16}")
+    private const val ROOT_HELPER_LIBRARY = "libcve43499root.so"
+    private val CACHE_ID = Regex("v3-[0-9a-f]{16}-[0-9a-f]{16}(?:-[0-9a-f]{16})?")
 
     fun hasValid(context: Context): Boolean = runCatching {
         load(context)
@@ -60,6 +61,7 @@ internal object KnownGoodPayloadStore {
         require(fileMatchesArtifact(payloads.kernelSu, profile.kernelSu.artifact)) {
             "KernelSU failed final cache verification"
         }
+        verifyBundledRootHelper(context, profile)
 
         val id = cacheId(profile)
         val root = File(context.filesDir, ROOT).apply {
@@ -71,7 +73,8 @@ internal object KnownGoodPayloadStore {
             val existing = loadDirectory(context, destination)
             existing.profile.profileId == profile.profileId &&
                 existing.profile.exploit.sha256 == profile.exploit.sha256 &&
-                existing.profile.kernelSu.artifact.sha256 == profile.kernelSu.artifact.sha256
+                existing.profile.kernelSu.artifact.sha256 == profile.kernelSu.artifact.sha256 &&
+                existing.profile.rootHelper?.sha256 == profile.rootHelper?.sha256
         }.getOrDefault(false)
 
         if (!reusable) {
@@ -117,6 +120,7 @@ internal object KnownGoodPayloadStore {
         require(profile.exactMatch != null && profile.matches(DeviceSnapshot.current())) {
             context.getString(R.string.autoroot_unsupported_firmware)
         }
+        verifyBundledRootHelper(context, profile)
 
         val exploit = File(directory, EXPLOIT)
         val kernelSu = File(directory, KSUD)
@@ -131,8 +135,18 @@ internal object KnownGoodPayloadStore {
         return VerifiedPayloads(profile, exploit, kernelSu, PayloadSource.Offline)
     }
 
-    private fun cacheId(profile: TargetProfile): String =
-        "v3-${profile.exploit.sha256.take(16)}-${profile.kernelSu.artifact.sha256.take(16)}"
+    private fun verifyBundledRootHelper(context: Context, profile: TargetProfile) {
+        val expected = profile.rootHelper ?: return
+        val helper = File(context.applicationInfo.nativeLibraryDir, ROOT_HELPER_LIBRARY)
+        require(fileMatchesArtifact(helper, expected)) {
+            "The cached payload requires a different root helper; update Root My Galaxy and refresh Manual Online"
+        }
+    }
+
+    private fun cacheId(profile: TargetProfile): String {
+        val base = "v3-${profile.exploit.sha256.take(16)}-${profile.kernelSu.artifact.sha256.take(16)}"
+        return profile.rootHelper?.let { "$base-${it.sha256.take(16)}" } ?: base
+    }
 
     private fun copyVerified(source: File, destination: File, artifact: RemoteArtifact) {
         require(fileMatchesArtifact(source, artifact))

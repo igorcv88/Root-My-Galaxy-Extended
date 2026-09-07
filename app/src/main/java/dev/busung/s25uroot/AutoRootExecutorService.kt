@@ -74,8 +74,6 @@ class AutoRootExecutorService : Service() {
             return
         }
 
-        // Visible proof that the fresh process not only connected, but accepted
-        // the launch command. The worker starts only after this point.
         updateNotification(getString(R.string.autoroot_preparing_exploit))
         Log.i(TAG, "Auto Root executor start command accepted")
         runJob = scope.launch { runAutoRoot(bootToken) }
@@ -90,8 +88,6 @@ class AutoRootExecutorService : Service() {
 
         var historyEntry: InstallHistoryEntry? = null
 
-        // No History disk writes while the exploit is active. The cumulative
-        // runner log stays in memory and is persisted only after success/failure.
         fun appendHistory(line: String?) {
             val current = historyEntry ?: return
             val clean = line?.trim().orEmpty()
@@ -102,7 +98,7 @@ class AutoRootExecutorService : Service() {
         fun finishHistory(result: InstallRunResult) {
             val current = historyEntry ?: return
             val updated = current.copy(
-                completedAtMillis = System.currentTimeMillis(),
+                completedAtMillis = current.completedAtMillis ?: System.currentTimeMillis(),
                 result = result,
             )
             historyEntry = updated
@@ -155,8 +151,6 @@ class AutoRootExecutorService : Service() {
                         AutoRootStage.VerifyingRoot -> R.string.autoroot_verifying_root
                     }
                     val stageMessage = getString(messageRes)
-                    // Every coarse stage is visible. Notification work happens only
-                    // at stage boundaries, never inside the exploit race itself.
                     updateNotification(stageMessage)
                     appendHistory("[*] $stageMessage")
                 },
@@ -177,22 +171,47 @@ class AutoRootExecutorService : Service() {
 
             AutoRootSupport.markVerifiedForBoot(this, bootToken)
             appendHistory("[+] Auto Root completed")
+
+            // Save success before post-root userspace work. If zygote restart
+            // kills this process, History still contains the verified root result.
             finishHistory(InstallRunResult.Succeeded)
 
-            if (AppPreferences.softRebootAfterRoot(this)) {
-                updateNotification(getString(R.string.soft_reboot_starting))
-                val reboot = KernelSuSoftReboot.request(this)
-                if (reboot.started) {
-                    Log.i(TAG, "KernelSU soft reboot started")
+            val softReboot = AppPreferences.softRebootAfterRoot(this)
+            val startShizuku = AppPreferences.autoStartShizukuAfterRoot(this)
+            if (softReboot || startShizuku) {
+                if (softReboot) updateNotification(getString(R.string.soft_reboot_starting))
+
+                val postRoot = try {
+                    PostRootAutomation.run(
+                        context = this,
+                        softReboot = softReboot,
+                        startShizuku = startShizuku,
+                        onLog = { appendHistory(it) },
+                    )
+                } catch (error: Throwable) {
+                    val detail = error.message ?: error.javaClass.simpleName
+                    appendHistory("[!] Post-root automation failed: $detail")
+                    Log.w(TAG, "Post-root automation failed after verified root", error)
+                    null
+                }
+
+                finishHistory(InstallRunResult.Succeeded)
+
+                if (postRoot?.softRebootStarted == true) {
+                    Log.i(TAG, "KernelSU userspace restart started")
                     stopGateAndSelf(removeNotification = true)
                     return
                 }
-                val failureMessage = getString(R.string.soft_reboot_failed, reboot.detail.take(160))
-                Log.w(TAG, failureMessage)
-                appendHistory("[-] $failureMessage")
-                finishHistory(InstallRunResult.Succeeded)
-                finishWithResult(failureMessage)
-                return
+
+                if (softReboot && postRoot != null && !postRoot.softRebootStarted) {
+                    val failureMessage = getString(
+                        R.string.soft_reboot_failed,
+                        postRoot.detail.take(160),
+                    )
+                    Log.w(TAG, failureMessage)
+                    finishWithResult(failureMessage)
+                    return
+                }
             }
 
             finishWithResult(getString(R.string.autoroot_root_restored))

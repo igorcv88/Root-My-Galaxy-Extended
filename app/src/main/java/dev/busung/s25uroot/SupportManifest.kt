@@ -57,6 +57,7 @@ data class TargetProfile(
     val exactMatch: ExactTargetMatch?,
     val exploit: RemoteArtifact,
     val kernelSu: KernelSuArtifact,
+    val rootHelper: RemoteArtifact? = null,
     val source: PayloadSource = PayloadSource.Online,
 ) {
     init {
@@ -145,6 +146,7 @@ data class SupportManifest(
                     val payload = payloadsJson.getJSONObject(index)
                     val exploit = payload.getJSONObject("exploit")
                     val kernelSu = payload.getJSONObject("kernelsu")
+                    val rootHelper = payload.optJSONObject("rootHelper")
                     val exact = payload.optJSONObject("exactMatch")
                     add(
                         TargetProfile(
@@ -176,6 +178,7 @@ data class SupportManifest(
                                     "me.weishu.kernelsu",
                                 ),
                             ),
+                            rootHelper = rootHelper?.artifact(),
                         ),
                     )
                 }
@@ -208,6 +211,7 @@ private fun TargetProfile.toJsonObject(): JSONObject = JSONObject()
             .put("kmi", kernelSu.kmi)
             .put("managerPackage", kernelSu.managerPackage),
     )
+    .apply { rootHelper?.let { put("rootHelper", it.toJsonObject()) } }
 
 private fun ExactTargetMatch.toJsonObject(): JSONObject = JSONObject()
     .put("manufacturer", manufacturer)
