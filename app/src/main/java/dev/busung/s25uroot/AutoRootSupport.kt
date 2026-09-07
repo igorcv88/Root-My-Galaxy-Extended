@@ -10,6 +10,7 @@ internal object AutoRootSupport {
     private const val RECEIPT_VERIFIED = "verified"
     private const val AUTO_ROOT_STATE = "auto_root_state"
     private const val LAST_ATTEMPT_BOOT_TOKEN = "last_attempt_boot_id"
+    private const val LAST_BOOT_COMPLETED_BOOT_TOKEN = "last_boot_completed_boot_id"
 
     fun currentBootToken(): String? = runCatching {
         File("/proc/sys/kernel/random/boot_id")
@@ -43,6 +44,27 @@ internal object AutoRootSupport {
             .commit()
         require(stored) { context.getString(R.string.error_receipt) }
     }
+
+    /**
+     * Consume the framework BOOT_COMPLETED event for this kernel boot exactly once.
+     *
+     * A zygote/system_server userspace restart may emit another BOOT_COMPLETED while
+     * /proc/sys/kernel/random/boot_id remains unchanged. Auto Root must never treat
+     * that as a fresh boot. This marker is app-side bookkeeping only and is touched
+     * before the foreground gate/exploit exists, so it cannot perturb the race.
+     */
+    @Synchronized
+    fun claimBootCompletedForKernel(context: Context, bootToken: String): Boolean {
+        val preferences = context.getSharedPreferences(AUTO_ROOT_STATE, Context.MODE_PRIVATE)
+        if (preferences.getString(LAST_BOOT_COMPLETED_BOOT_TOKEN, null) == bootToken) return false
+        return preferences.edit()
+            .putString(LAST_BOOT_COMPLETED_BOOT_TOKEN, bootToken)
+            .commit()
+    }
+
+    fun hasAttemptedBoot(context: Context, bootToken: String): Boolean =
+        context.getSharedPreferences(AUTO_ROOT_STATE, Context.MODE_PRIVATE)
+            .getString(LAST_ATTEMPT_BOOT_TOKEN, null) == bootToken
 
     @Synchronized
     fun claimAttempt(context: Context, bootToken: String): Boolean {
