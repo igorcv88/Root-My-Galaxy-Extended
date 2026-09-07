@@ -52,7 +52,8 @@ Compared with the base Root My Galaxy app, this fork currently adds or changes:
 - configurable total boot-uptime launch gate (default 120 s on CZG3);
 - v0266 root-helper auto-late-load support with app-side late-load fallback;
 - persistent local Wireless ADB pairing and automatic Shizuku restart after root;
-- a KernelSU userspace lifecycle soft reboot route (`post-fs-data → services → boot-completed → zygote restart`);
+- a **single-owner root-side module keeper** that does not replay KernelSU lifecycle stages and performs at most one guarded zygote respawn per kernel boot;
+- explicit readiness guards for `Meta-Overlayfsx-ViPER-safe`, including its ext4 image, kernel inspector and granular ViPER mount completion;
 - installation History with captured logs, per-run export and ZIP export of all or selected completed runs.
 
 The exploit race itself remains deliberately small: the app does not reintroduce the former External Observer, pselect gate, SIGRETURN interception, syscall wrappers or race telemetry into the critical path.
@@ -77,6 +78,12 @@ Manual Online / Manual Offline / Auto Root
        root result is checkpointed
                   ↓
   optional post-root userspace actions
+                  ↓
+   Shizuku bootstrap (if enabled)
+                  ↓
+ detached single-owner module keeper
+                  ↓
+     one guarded zygote respawn
 ```
 
 The v0266 helper can late-load KernelSU immediately after root lands, avoiding a second client round trip. If that path is not ready, the app retains the explicit client `--late-load` fallback.
@@ -108,12 +115,12 @@ Offline + Standalone exploit
       ↓
 KernelSU verification
       ↓
-History result
+History result checkpoint
       ↓
-post-root automation
+post-root automation / detached keeper
 ```
 
-It never chooses Shizuku automatically, never downloads a payload and runs at most once per full kernel boot. A soft/userspace reboot keeps the same kernel boot and does not schedule another exploit attempt.
+It never chooses Shizuku automatically for root acquisition, never downloads a payload and runs at most once per full kernel boot. A soft/userspace reboot keeps the same `/proc/sys/kernel/random/boot_id`; duplicate `BOOT_COMPLETED` events for that same kernel boot are consumed and any stale Auto Root foreground service/notification is torn down instead of launching another exploit.
 
 ## Launch uptime
 
@@ -138,21 +145,63 @@ After the first successful pairing/root bootstrap, the app uses KernelSU shell r
 
 If pairing is missing during Auto Root, root still succeeds; the post-root step records that pairing is required instead of turning the exploit result into failure.
 
-## Soft reboot after root
+## Module pickup and zygote refresh after root
 
-The previous bootstrap-socket soft-reboot handoff has been replaced. When enabled, and only after root is already verified, the app uses the authenticated local ADB/KernelSU shell to run the userspace lifecycle proven by the HyperRamzey fork:
+The old bootstrap-socket soft-reboot handoff and the later app-side KernelSU lifecycle replay have both been removed from the active path.
+
+The app **does not** run this sequence anymore:
 
 ```text
 ksud post-fs-data
-      ↓
 ksud services
-      ↓
 ksud boot-completed
-      ↓
-restart zygote / zygote64
+kill zygote
 ```
 
-The root result is checkpointed before this phase. A Wireless ADB, Shizuku or soft-reboot failure is therefore logged as a post-root failure and does not retroactively mark a verified root as failed.
+v0266 `late-load` remains the owner of KernelSU/module lifecycle initialization. After KernelSU has been verified and the successful root result has already been checkpointed, the app may launch one detached root-side keeper. From that point the Android app, Auto Root gate and `:autoroot_exec` process are no longer owners of module activation and never kill zygote themselves.
+
+The keeper performs only readiness/idempotence checks and one zygote respawn:
+
+```text
+verified KernelSU late-load
+        ↓
+verify same kernel boot_id
+        ↓
+wait for sys.boot_completed
+        ↓
+wait for module/mount readiness
+        ↓
+verify zygote PID set is stable
+        ↓
+re-check boot_id + done marker
+        ↓
+kill old zygote/zygote64 once
+        ↓
+wait for a different zygote PID set
+        ↓
+verify same kernel boot_id + system_server
+        ↓
+write .cve43499-modules-done = <boot_id> <uptime>
+```
+
+A per-boot owner lock and done marker make the operation idempotent. If another keeper already owns the same `boot_id`, or the done marker already belongs to that boot, no second restart is attempted. If the kernel `boot_id` changes at any safety boundary, the keeper aborts without writing a success marker.
+
+### Meta-Overlayfsx-ViPER-safe
+
+This device uses **[igorcv88/Meta-Overlayfsx-ViPER-safe](https://github.com/igorcv88/Meta-Overlayfsx-ViPER-safe)**, not the stock Meta OverlayFS metamodule.
+
+The fork's `post-fs-data.sh` only resets its log. Its actual mount work lives in `metamount.sh`: the ext4 module image is mounted, ordinary modules are passed through OverlayFSx, and `ViPER4Android-RE-AIDL` is explicitly excluded from broad partition-root OverlayFS so its audio configuration/soundfx payload can be mounted granularly instead.
+
+Because of that architecture, replaying `post-fs-data` or manually re-running `metamount.sh` after KernelSU late-load is unnecessary and can create an invalid lifecycle ordering for other modules. The keeper instead observes the already-created state. When `meta-overlayfsx` is enabled it waits for:
+
+- `/data/adb/metamodule/mnt` to exist as an active mount;
+- the OverlayFSx kernel inspector to return `"status": "success"` when available;
+- if `ViPER4Android-RE-AIDL` is enabled, the fork's `Granular ViPER mounting completed without partition-root overlays` completion line;
+- absence of a stale broad `/vendor` or `/system` ViPER root overlay.
+
+If any of those checks fail, the keeper leaves the existing zygote alone rather than attempting to repair mounts by replaying KernelSU/module lifecycle stages.
+
+The keeper runtime log is `/data/local/tmp/rmg-postroot-keeper.log`; the boot-scoped completion marker is `/data/local/tmp/.cve43499-modules-done`.
 
 ## v0266 payload/helper binding
 
@@ -176,7 +225,8 @@ This fork combines work from several projects and contributors. Credit is explic
 
 - **[BuSung-dev/Root-My-Galaxy](https://github.com/BuSung-dev/Root-My-Galaxy)** — upstream application architecture, UI, installer flow, Shizuku integration, History and the original Root My Galaxy project.
 - **[BuSung-dev/Root-My-Galaxy-Payloads](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads)** — upstream payload/feed architecture and Samsung exploit integration used by the companion payload repository.
-- **[HyperRamzey/Root-My-Galaxy](https://github.com/HyperRamzey/Root-My-Galaxy)** — source for the persistent local Wireless ADB key/pairing stack, mDNS discovery, local ADB client, post-root Shizuku automation and the KernelSU userspace lifecycle/zygote-restart approach adapted in this fork.
+- **[HyperRamzey/Root-My-Galaxy](https://github.com/HyperRamzey/Root-My-Galaxy)** and **[HyperRamzey/Root-My-Galaxy-Payloads](https://github.com/HyperRamzey/Root-My-Galaxy-Payloads)** — source for the persistent local Wireless ADB key/pairing stack, mDNS discovery, local ADB client, post-root Shizuku automation, and especially the single-owner/keeper + boot-scoped marker approach used as the model for the guarded zygote refresh in this fork.
+- **[igorcv88/Meta-Overlayfsx-ViPER-safe](https://github.com/igorcv88/Meta-Overlayfsx-ViPER-safe)**, based on **[RipperHybrid/meta-overlayfsx](https://github.com/RipperHybrid/meta-overlayfsx)** — OverlayFSx metamodule and the ViPER-safe granular mount architecture whose actual readiness signals are observed by the post-root keeper instead of replaying its lifecycle.
 - **[mitschud](https://github.com/mitschud)** / **[BuSung payload PR #300](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads/pull/300)** — hardware-tested Tracefs KASLR route and the root-helper auto-late-load design (`--allow-shell`, DEFEX-safe bind execution, daemon-stay and late-load markers) adapted to CZG3 v0266.
 - **[NebuSec/CyberMeowfia](https://github.com/NebuSec/CyberMeowfia/tree/main/IonStack/CVE-2026-43499/exploit)** — published CVE-2026-43499 exploit source on which the payload lineage is based.
 - **[KernelSU](https://github.com/tiann/KernelSU)** by tiann and contributors — kernel root framework, manager and `ksud` lifecycle used after bootstrap root.
