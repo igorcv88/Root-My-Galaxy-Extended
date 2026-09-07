@@ -120,6 +120,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
@@ -937,24 +938,28 @@ private fun HistoryPage(
     var selectedHistoryId by remember { mutableStateOf<String?>(null) }
     var selectionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingDeleteIds by remember { mutableStateOf<Set<String>?>(null) }
-    var pendingExportEntries by remember { mutableStateOf<List<InstallHistoryEntry>>(emptyList()) }
+    var pendingExportIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     val exportLogsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
-        val entries = pendingExportEntries
-        pendingExportEntries = emptyList()
+        val ids = pendingExportIds.toSet()
+        pendingExportIds = arrayListOf()
         result.data?.data?.let { uri ->
+            val entries = history.filter {
+                it.id in ids && it.result != InstallRunResult.Running
+            }
             if (entries.isNotEmpty()) HistoryLogExporter.save(context, uri, entries)
         }
     }
     val launchExport: (List<InstallHistoryEntry>) -> Unit = { entries ->
-        if (entries.isNotEmpty()) {
-            pendingExportEntries = entries.toList()
+        val stableEntries = entries.filter { it.result != InstallRunResult.Running }
+        if (stableEntries.isNotEmpty()) {
+            pendingExportIds = ArrayList(stableEntries.map { it.id })
             exportLogsLauncher.launch(
                 Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                     addCategory(Intent.CATEGORY_OPENABLE)
                     type = "application/zip"
-                    putExtra(Intent.EXTRA_TITLE, HistoryLogExporter.archiveFileName(entries))
+                    putExtra(Intent.EXTRA_TITLE, HistoryLogExporter.archiveFileName(stableEntries))
                 },
             )
         }
@@ -1015,10 +1020,12 @@ private fun HistoryPage(
                 selectionIds = selectionIds,
                 selectableIds = selectableIds,
                 onToggleSelection = { id ->
-                    selectionIds = if (id in selectionIds) {
-                        selectionIds - id
-                    } else {
-                        selectionIds + id
+                    if (id in selectableIds) {
+                        selectionIds = if (id in selectionIds) {
+                            selectionIds - id
+                        } else {
+                            selectionIds + id
+                        }
                     }
                 },
                 onSelectAll = {
@@ -1030,12 +1037,16 @@ private fun HistoryPage(
                 },
                 onClearSelection = { selectionIds = emptySet() },
                 onEntryClick = { selectedHistoryId = it.id },
-                onDeleteSelected = { pendingDeleteIds = selectionIds },
+                onDeleteSelected = { pendingDeleteIds = selectionIds.intersect(selectableIds) },
                 onExportAll = {
                     launchExport(history.filter { it.result != InstallRunResult.Running })
                 },
                 onExportSelected = {
-                    launchExport(history.filter { it.id in selectionIds })
+                    launchExport(
+                        history.filter {
+                            it.id in selectionIds && it.result != InstallRunResult.Running
+                        },
+                    )
                 },
             )
         } else {
@@ -1148,7 +1159,7 @@ private fun HistoryList(
                         selectable = entry.id in selectableIds,
                         onClick = {
                             if (selecting) {
-                                onToggleSelection(entry.id)
+                                if (entry.id in selectableIds) onToggleSelection(entry.id)
                             } else {
                                 onEntryClick(entry)
                             }
