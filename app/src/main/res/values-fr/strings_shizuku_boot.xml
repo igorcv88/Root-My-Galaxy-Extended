@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shizuku_boot_section">Démarrage de Shizuku</string>
+    <string name="shizuku_boot_title">Démarrer Shizuku au démarrage</string>
+    <string name="shizuku_boot_description">RMG attend une connexion Wi‑Fi quelconque et démarre Shizuku sans retarder Auto Root. D’autres mécanismes de démarrage, comme Shizuku ou Tasker, peuvent servir de secours, mais un seul mécanisme principal évite les exécutions concurrentes en double.</string>
+    <string name="shizuku_boot_waiting">En attente du Wi‑Fi ou d’un Binder Shizuku existant</string>
+    <string name="shizuku_boot_auth_token">Jeton d’authentification de l’automatisation</string>
+    <string name="shizuku_boot_auth_token_description">Solution de secours facultative via Intent. Copiez le jeton depuis Shizuku → Control Shizuku with automation apps.</string>
+</resources>
