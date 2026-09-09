@@ -104,6 +104,7 @@ internal object PostRootModuleKeeper {
         LOCK='/data/local/tmp/.cve43499-modules-owner'
         OVERLAY_META='/data/adb/modules/meta-overlayfsx'
         OVERLAY_HOME='/data/adb/metamodule'
+        OVERLAY_DATA='/data/adb/overlayfsx-data'
         VIPER_META='/data/adb/modules/ViPER4Android-RE-AIDL'
 
         log() {
@@ -183,15 +184,23 @@ internal object PostRootModuleKeeper {
         fi
         log "KernelSU late-load state accepted via ${'$'}KSUD"
 
-        # Meta-Overlayfsx-ViPER-safe readiness. metamount.sh owns the ext4/
-        # OverlayFSx mounts and ViPER granular bind mounts; wait for that state
-        # instead of replaying post-fs-data, metamount, service, or boot-completed.
+        # Meta-Overlayfsx-ViPER-safe readiness. viper-safe.4 mounts its ext4
+        # image outside the metamodule directory so KernelSU can replace the
+        # module on updates without EBUSY. Accept the legacy path only for older
+        # installed releases while the migration is being rolled out.
         if [ -d "${'$'}OVERLAY_META" ] && [ ! -f "${'$'}OVERLAY_META/disable" ]; then
             mounted=0
+            overlay_mnt=''
             i=0
             while [ "${'$'}i" -lt 45 ]; do
+                if grep -F " ${'$'}OVERLAY_DATA/mnt " /proc/mounts >/dev/null 2>&1; then
+                    mounted=1
+                    overlay_mnt="${'$'}OVERLAY_DATA/mnt"
+                    break
+                fi
                 if grep -F " ${'$'}OVERLAY_HOME/mnt " /proc/mounts >/dev/null 2>&1; then
                     mounted=1
+                    overlay_mnt="${'$'}OVERLAY_HOME/mnt"
                     break
                 fi
                 i=${'$'}((i + 1))
@@ -201,6 +210,7 @@ internal object PostRootModuleKeeper {
                 log "Meta-Overlayfsx ext4 image never became mounted"
                 exit 65
             fi
+            log "Meta-Overlayfsx ext4 image ready at ${'$'}overlay_mnt"
 
             if [ -x "${'$'}OVERLAY_HOME/overlayfsx" ]; then
                 inspect_ok=0
