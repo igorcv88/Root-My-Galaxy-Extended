@@ -108,6 +108,7 @@ internal object PostRootModuleKeeper {
         DONE='$DONE_MARKER'
         ACCEPTED='$START_MARKER'
         LOCK='/data/local/tmp/.rmg-soft-reboot-owner'
+        KSUD='/data/adb/ksud'
 
         log() {
             echo "[keeper] ${'$'}(date +%s 2>/dev/null) ${'$'}*"
@@ -186,15 +187,13 @@ internal object PostRootModuleKeeper {
             exit 63
         fi
 
-        # Only consume the already-installed KernelSU userspace binary. Never
-        # run late-load here, never touch the staged bootstrap executable, and
-        # never replace daemon state. /data/adb/ksud is the expected S938B path.
-        KSUD=''
-        for p in /data/adb/ksud /data/adb/ksu/bin/ksud /data/local/tmp/ksud-s25u-kdp; do
-            if [ -x "${'$'}p" ]; then KSUD="${'$'}p"; break; fi
-        done
-        if [ -z "${'$'}KSUD" ]; then
-            log "KernelSU userspace binary not found after verified late-load"
+        # Consume only the daemon installed by the already-verified late-load.
+        # Do not fall back to a target-named /data/local/tmp ksud: on a multi-
+        # firmware app that could select a stale binary embedding the wrong LKM.
+        # Missing /data/adb/ksud is therefore a post-root failure, not permission
+        # to stage, replace, or re-run late-load from here.
+        if [ ! -x "${'$'}KSUD" ]; then
+            log "installed KernelSU daemon missing or not executable at ${'$'}KSUD"
             exit 64
         fi
         log "KernelSU soft-reboot binary accepted via ${'$'}KSUD"
