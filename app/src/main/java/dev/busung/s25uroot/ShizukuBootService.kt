@@ -37,7 +37,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  *
  * A soft/userspace reboot preserves KernelSU because the kernel boot does not
  * change. Therefore, after the initial Binder probe, this service first tries a
- * root-backed Shizuku starter without waiting for Wi-Fi or enabling Wireless
+ * root-backed Shizuku starter without waiting for Wi-Fi or touching Wireless
  * Debugging. On a normal full boot where ephemeral KernelSU is not active yet,
  * that probe fails closed and the existing event-driven Wi-Fi/ADB path remains
  * unchanged.
@@ -79,9 +79,8 @@ class ShizukuBootService : Service() {
             } catch (error: Throwable) {
                 Log.w(TAG, "Early Shizuku bootstrap failed", error)
             } finally {
-                // Fail closed: any Wireless ADB session owned by this service is
-                // forced off even if cancellation lands between normal cleanup steps.
-                TemporaryWirelessAdb.forceDisable(this@ShizukuBootService)
+                // TemporaryWirelessAdb.use owns cleanup for the ADB branch.
+                // Root-only starts never touch adb_wifi_enabled at all.
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -93,7 +92,9 @@ class ShizukuBootService : Service() {
 
     override fun onDestroy() {
         bootstrapJob?.cancel()
-        TemporaryWirelessAdb.forceDisable(this)
+        // Cancellation inside TemporaryWirelessAdb.use executes its own finally;
+        // abrupt process death is covered by TemporaryWirelessAdb's failsafe alarm.
+        // Do not disable Wireless ADB here when this service only used root.
         scope.cancel()
         super.onDestroy()
     }
