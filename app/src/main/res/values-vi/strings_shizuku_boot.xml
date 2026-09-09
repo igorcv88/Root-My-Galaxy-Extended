@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shizuku_boot_section">Khởi động Shizuku</string>
+    <string name="shizuku_boot_title">Khởi động Shizuku khi bật máy</string>
+    <string name="shizuku_boot_description">RMG chờ bất kỳ kết nối Wi‑Fi nào rồi khởi động Shizuku mà không làm chậm Auto Root. Các trình khởi động khác như Shizuku hoặc Tasker có thể dùng làm dự phòng, nhưng chỉ nên dùng một trình khởi động chính để tránh chạy trùng.</string>
+    <string name="shizuku_boot_waiting">Đang chờ Wi‑Fi hoặc Shizuku Binder hiện có</string>
+    <string name="shizuku_boot_auth_token">Mã xác thực tự động hóa</string>
+    <string name="shizuku_boot_auth_token_description">Phương án dự phòng Intent tùy chọn. Sao chép mã từ Shizuku → Control Shizuku with automation apps.</string>
+</resources>
