@@ -71,7 +71,8 @@ internal object PostRootModuleKeeper {
             append("setsid sh '$KEEPER_PATH' >>'$OWNER_LOG' 2>&1 < /dev/null &\n")
             // Do not call the handoff successful merely because the keeper
             // forked. Wait until every guard has passed and the keeper is at the
-            // exact point immediately before invoking `ksud soft-reboot`.
+            // exact point immediately before invoking `ksud soft-reboot`, or has
+            // proven another same-boot keeper already owns that request.
             append("i=0; while [ \"\$i\" -lt 50 ]; do ")
             append("[ \"\$(cat '$START_MARKER' 2>/dev/null)\" = $expectedQuoted ] && { echo rmg-soft-reboot-requesting; exit 0; }; ")
             append("i=\$((i+1)); sleep 0.1; done\n")
@@ -121,6 +122,12 @@ internal object PostRootModuleKeeper {
             awk 'NR == 1 { print ${'$'}1; exit }' "${'$'}DONE" 2>/dev/null
         }
 
+        publish_requesting() {
+            printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}REQUESTING" || return 1
+            chown 2000:2000 "${'$'}REQUESTING" 2>/dev/null
+            chmod 0664 "${'$'}REQUESTING" 2>/dev/null
+        }
+
         publish_accepted() {
             UP="${'$'}(cut -d. -f1 /proc/uptime 2>/dev/null)"
             TMP="${'$'}DONE.tmp.${'$'}${'$'}"
@@ -143,7 +150,7 @@ internal object PostRootModuleKeeper {
 
         if [ "${'$'}(marker_boot 2>/dev/null)" = "${'$'}EXPECTED_BOOT" ]; then
             log "soft-reboot accepted marker already belongs to this boot; nothing to do"
-            printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}REQUESTING" 2>/dev/null || true
+            publish_requesting 2>/dev/null || true
             exit 0
         fi
 
@@ -151,6 +158,10 @@ internal object PostRootModuleKeeper {
             LOCK_BOOT="${'$'}(cat "${'$'}LOCK/boot_id" 2>/dev/null)"
             if [ "${'$'}LOCK_BOOT" = "${'$'}EXPECTED_BOOT" ]; then
                 log "another soft-reboot keeper already owns this kernel boot"
+                # The request is already single-owned for this exact boot. Let
+                # the app treat the duplicate caller as accepted without ever
+                # issuing a second ksud soft-reboot command.
+                publish_requesting 2>/dev/null || true
                 exit 0
             fi
             rm -rf "${'$'}LOCK" 2>/dev/null
@@ -195,7 +206,7 @@ internal object PostRootModuleKeeper {
         fi
         if [ "${'$'}(marker_boot 2>/dev/null)" = "${'$'}EXPECTED_BOOT" ]; then
             log "another owner accepted soft reboot while waiting; no second request"
-            printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}REQUESTING" 2>/dev/null || true
+            publish_requesting 2>/dev/null || true
             exit 0
         fi
 
@@ -205,9 +216,7 @@ internal object PostRootModuleKeeper {
         # gives metamodules and ordinary modules their normal lifecycle ordering.
         # Do not gate this on mounts that the soft reboot itself is responsible
         # for creating, and do not restart zygote directly.
-        printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}REQUESTING" || exit 79
-        chown 2000:2000 "${'$'}REQUESTING" 2>/dev/null
-        chmod 0664 "${'$'}REQUESTING" 2>/dev/null
+        publish_requesting || exit 79
         log "requesting KernelSU native soft reboot"
         "${'$'}KSUD" soft-reboot
         RC=${'$'}?
