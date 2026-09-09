@@ -17,7 +17,7 @@ internal data class ModuleKeeperLaunchResult(
  */
 internal object PostRootModuleKeeper {
     const val DONE_MARKER = "/data/local/tmp/.rmg-soft-reboot-accepted"
-    const val START_MARKER = "/data/local/tmp/.rmg-soft-reboot-keeper-started"
+    const val START_MARKER = "/data/local/tmp/.rmg-soft-reboot-requesting"
     const val OWNER_LOG = "/data/local/tmp/rmg-postroot-keeper.log"
     private const val KEEPER_PATH = "/data/local/tmp/rmg-postroot-keeper.sh"
 
@@ -69,21 +69,24 @@ internal object PostRootModuleKeeper {
             append(": > '$OWNER_LOG'\n")
             append("chmod 0666 '$OWNER_LOG'\n")
             append("setsid sh '$KEEPER_PATH' >>'$OWNER_LOG' 2>&1 < /dev/null &\n")
-            // Require the detached keeper itself to prove it reached its first
-            // executable action before the app reports the handoff as accepted.
-            append("i=0; while [ \"\$i\" -lt 30 ]; do ")
-            append("[ \"\$(cat '$START_MARKER' 2>/dev/null)\" = $expectedQuoted ] && { echo rmg-keeper-started; exit 0; }; ")
+            // Do not call the handoff successful merely because the keeper
+            // forked. Wait until every guard has passed and the keeper is at the
+            // exact point immediately before invoking `ksud soft-reboot`.
+            append("i=0; while [ \"\$i\" -lt 50 ]; do ")
+            append("[ \"\$(cat '$START_MARKER' 2>/dev/null)\" = $expectedQuoted ] && { echo rmg-soft-reboot-requesting; exit 0; }; ")
             append("i=\$((i+1)); sleep 0.1; done\n")
-            append("echo 'keeper did not publish start marker' >&2; exit 78\n")
+            append("echo 'soft-reboot keeper did not reach request point' >&2\n")
+            append("tail -n 8 '$OWNER_LOG' >&2 2>/dev/null || true\n")
+            append("exit 78\n")
         }
 
         val result = rootShell(installAndLaunch)
-        if (result.exitCode != 0 || !result.output.contains("rmg-keeper-started")) {
+        if (result.exitCode != 0 || !result.output.contains("rmg-soft-reboot-requesting")) {
             val detail = result.output.trim().ifBlank { "keeper launcher exit ${result.exitCode}" }
-            return ModuleKeeperLaunchResult(false, detail = detail.takeLast(240))
+            return ModuleKeeperLaunchResult(false, detail = detail.takeLast(320))
         }
 
-        onLog("[+] Single-owner KernelSU soft-reboot keeper confirmed running")
+        onLog("[+] KernelSU soft-reboot keeper reached native request point")
         onLog("[*] Keeper log: $OWNER_LOG")
         return ModuleKeeperLaunchResult(accepted = true)
     }
@@ -102,7 +105,7 @@ internal object PostRootModuleKeeper {
 
         EXPECTED_BOOT=${shellQuote(expectedBootId)}
         DONE='$DONE_MARKER'
-        STARTED='$START_MARKER'
+        REQUESTING='$START_MARKER'
         LOCK='/data/local/tmp/.rmg-soft-reboot-owner'
 
         log() {
@@ -130,10 +133,6 @@ internal object PostRootModuleKeeper {
             chmod 0664 "${'$'}DONE" 2>/dev/null
         }
 
-        # First executable action visible to the launcher.
-        printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}STARTED" || exit 59
-        chown 2000:2000 "${'$'}STARTED" 2>/dev/null
-        chmod 0664 "${'$'}STARTED" 2>/dev/null
         log "keeper process started boot_id=${'$'}EXPECTED_BOOT pid=${'$'}${'$'}"
 
         BOOT="${'$'}(current_boot)"
@@ -144,6 +143,7 @@ internal object PostRootModuleKeeper {
 
         if [ "${'$'}(marker_boot 2>/dev/null)" = "${'$'}EXPECTED_BOOT" ]; then
             log "soft-reboot accepted marker already belongs to this boot; nothing to do"
+            printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}REQUESTING" 2>/dev/null || true
             exit 0
         fi
 
@@ -177,8 +177,8 @@ internal object PostRootModuleKeeper {
         fi
 
         # Only consume the already-installed KernelSU userspace binary. Never
-        # run late-load here, never touch .ksud-stage, and never replace daemon
-        # state. /data/adb/ksud is the expected path on the S938B flow.
+        # run late-load here, never touch the staged bootstrap executable, and
+        # never replace daemon state. /data/adb/ksud is the expected S938B path.
         KSUD=''
         for p in /data/adb/ksud /data/adb/ksu/bin/ksud /data/local/tmp/ksud-s25u-kdp; do
             if [ -x "${'$'}p" ]; then KSUD="${'$'}p"; break; fi
@@ -195,6 +195,7 @@ internal object PostRootModuleKeeper {
         fi
         if [ "${'$'}(marker_boot 2>/dev/null)" = "${'$'}EXPECTED_BOOT" ]; then
             log "another owner accepted soft reboot while waiting; no second request"
+            printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}REQUESTING" 2>/dev/null || true
             exit 0
         fi
 
@@ -204,6 +205,9 @@ internal object PostRootModuleKeeper {
         # gives metamodules and ordinary modules their normal lifecycle ordering.
         # Do not gate this on mounts that the soft reboot itself is responsible
         # for creating, and do not restart zygote directly.
+        printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}REQUESTING" || exit 79
+        chown 2000:2000 "${'$'}REQUESTING" 2>/dev/null
+        chmod 0664 "${'$'}REQUESTING" 2>/dev/null
         log "requesting KernelSU native soft reboot"
         "${'$'}KSUD" soft-reboot
         RC=${'$'}?
