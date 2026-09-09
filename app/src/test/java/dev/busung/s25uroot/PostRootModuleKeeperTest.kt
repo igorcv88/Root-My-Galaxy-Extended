@@ -54,35 +54,38 @@ class PostRootModuleKeeperTest {
     }
 
     @Test
-    fun requestHandshakeIsPublishedOnlyAfterGuardsAndBeforeKsudCall() {
+    fun acceptanceHandshakeIsPublishedOnlyAfterKsudReturnsSuccess() {
         val script = PostRootModuleKeeper.buildKeeperScript(
             "11111111-2222-3333-4444-555555555555",
         )
 
         val bootCompletedWait = script.indexOf("sys.boot_completed never became ready")
         val ksudSelection = script.indexOf("KSUD=''")
-        val requestMarkerWrite = script.indexOf("publish_requesting || exit 79")
         val softRebootCommand = script.indexOf("\"\$KSUD\" soft-reboot")
+        val rcGuard = script.indexOf("KernelSU native soft reboot request failed")
+        val acceptedMarkerWrite = script.indexOf("publish_request_accepted || exit 79")
 
         assertTrue(bootCompletedWait >= 0)
         assertTrue(ksudSelection > bootCompletedWait)
-        assertTrue(requestMarkerWrite > ksudSelection)
-        assertTrue(softRebootCommand > requestMarkerWrite)
+        assertTrue(softRebootCommand > ksudSelection)
+        assertTrue(rcGuard > softRebootCommand)
+        assertTrue(acceptedMarkerWrite > rcGuard)
     }
 
     @Test
-    fun sameBootOwnerIsAcceptedWithoutSecondSoftReboot() {
+    fun sameBootOwnerDoesNotPublishSuccessOnItsBehalf() {
         val script = PostRootModuleKeeper.buildKeeperScript(
             "11111111-2222-3333-4444-555555555555",
         )
 
-        val ownerBranch = script.indexOf("another soft-reboot keeper already owns this kernel boot")
-        val ownerAccept = script.indexOf("publish_requesting 2>/dev/null || true", ownerBranch)
-        val request = script.indexOf("\"\$KSUD\" soft-reboot")
-
+        val ownerBranch = script.indexOf(
+            "another soft-reboot keeper already owns this kernel boot; waiting for its acceptance marker",
+        )
         assertTrue(ownerBranch >= 0)
-        assertTrue(ownerAccept > ownerBranch)
-        assertTrue(request > ownerAccept)
+        val ownerExit = script.indexOf("exit 0", ownerBranch)
+        assertTrue(ownerExit > ownerBranch)
+        val ownerBlock = script.substring(ownerBranch, ownerExit)
+        assertFalse(ownerBlock.contains("publish_request_accepted"))
     }
 
     @Test
