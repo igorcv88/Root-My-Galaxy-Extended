@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shizuku_boot_section">Запуск Shizuku</string>
+    <string name="shizuku_boot_title">Запускать Shizuku при загрузке</string>
+    <string name="shizuku_boot_description">RMG ожидает любое подключение Wi‑Fi и запускает Shizuku, не задерживая Auto Root. Другие способы запуска, например встроенный запуск Shizuku или Tasker, можно использовать как резервные, но один основной способ запуска предотвращает дублирующиеся гонки.</string>
+    <string name="shizuku_boot_waiting">Ожидание Wi‑Fi или существующего Binder Shizuku</string>
+    <string name="shizuku_boot_auth_token">Токен авторизации автоматизации</string>
+    <string name="shizuku_boot_auth_token_description">Необязательный резервный запуск через Intent. Скопируйте токен в Shizuku → Control Shizuku with automation apps.</string>
+</resources>
