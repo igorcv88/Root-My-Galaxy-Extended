@@ -61,15 +61,28 @@ class PostRootModuleKeeperTest {
 
         val bootCompletedWait = script.indexOf("sys.boot_completed never became ready")
         val ksudSelection = script.indexOf("KSUD=''")
-        val requestMarkerWrite = script.indexOf(
-            "printf '%s\\n' \"\$EXPECTED_BOOT\" > \"\$REQUESTING\" || exit 79",
-        )
+        val requestMarkerWrite = script.indexOf("publish_requesting || exit 79")
         val softRebootCommand = script.indexOf("\"\$KSUD\" soft-reboot")
 
         assertTrue(bootCompletedWait >= 0)
         assertTrue(ksudSelection > bootCompletedWait)
         assertTrue(requestMarkerWrite > ksudSelection)
         assertTrue(softRebootCommand > requestMarkerWrite)
+    }
+
+    @Test
+    fun sameBootOwnerIsAcceptedWithoutSecondSoftReboot() {
+        val script = PostRootModuleKeeper.buildKeeperScript(
+            "11111111-2222-3333-4444-555555555555",
+        )
+
+        val ownerBranch = script.indexOf("another soft-reboot keeper already owns this kernel boot")
+        val ownerAccept = script.indexOf("publish_requesting 2>/dev/null || true", ownerBranch)
+        val request = script.indexOf("\"\$KSUD\" soft-reboot")
+
+        assertTrue(ownerBranch >= 0)
+        assertTrue(ownerAccept > ownerBranch)
+        assertTrue(request > ownerAccept)
     }
 
     @Test
