@@ -54,16 +54,22 @@ class PostRootModuleKeeperTest {
     }
 
     @Test
-    fun keeperPublishesStartHandshakeBeforeReadinessWaits() {
+    fun requestHandshakeIsPublishedOnlyAfterGuardsAndBeforeKsudCall() {
         val script = PostRootModuleKeeper.buildKeeperScript(
             "11111111-2222-3333-4444-555555555555",
         )
 
-        val startMarker = script.indexOf(PostRootModuleKeeper.START_MARKER)
-        val bootCompletedWait = script.indexOf("sys.boot_completed")
-        assertTrue(startMarker >= 0)
-        assertTrue(bootCompletedWait > startMarker)
-        assertTrue(script.contains("keeper process started"))
+        val bootCompletedWait = script.indexOf("sys.boot_completed never became ready")
+        val ksudSelection = script.indexOf("KSUD=''")
+        val requestMarkerWrite = script.indexOf(
+            "printf '%s\\n' \"\$EXPECTED_BOOT\" > \"\$REQUESTING\" || exit 79",
+        )
+        val softRebootCommand = script.indexOf("\"\$KSUD\" soft-reboot")
+
+        assertTrue(bootCompletedWait >= 0)
+        assertTrue(ksudSelection > bootCompletedWait)
+        assertTrue(requestMarkerWrite > ksudSelection)
+        assertTrue(softRebootCommand > requestMarkerWrite)
     }
 
     @Test
