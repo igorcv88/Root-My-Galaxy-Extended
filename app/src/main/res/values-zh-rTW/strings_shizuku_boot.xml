@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shizuku_boot_section">Shizuku 啟動</string>
+    <string name="shizuku_boot_title">開機時啟動 Shizuku</string>
+    <string name="shizuku_boot_description">RMG 會等待任意 Wi‑Fi 連線，並在不延遲 Auto Root 的情況下啟動 Shizuku。Shizuku 內建的啟動方式或 Tasker 等其他啟動器可作為備援方案，但只使用一個主要啟動器可避免重複啟動競爭。</string>
+    <string name="shizuku_boot_waiting">正在等待 Wi‑Fi 或現有的 Shizuku Binder</string>
+    <string name="shizuku_boot_auth_token">自動化驗證權杖</string>
+    <string name="shizuku_boot_auth_token_description">可選的 Intent 備援方案。請從 Shizuku → Control Shizuku with automation apps 複製權杖。</string>
+</resources>
