@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shizuku_boot_section">Shizuku başlatma</string>
+    <string name="shizuku_boot_title">Açılışta Shizuku’yu başlat</string>
+    <string name="shizuku_boot_description">RMG herhangi bir Wi‑Fi bağlantısını bekler ve Auto Root’u geciktirmeden Shizuku’yu başlatır. Shizuku’nun kendi başlatıcısı veya Tasker gibi diğer açılış yöntemleri yedek olarak kullanılabilir; ancak tek bir ana başlatıcı yinelenen yarışları önler.</string>
+    <string name="shizuku_boot_waiting">Wi‑Fi veya mevcut bir Shizuku Binder bekleniyor</string>
+    <string name="shizuku_boot_auth_token">Otomasyon kimlik doğrulama belirteci</string>
+    <string name="shizuku_boot_auth_token_description">İsteğe bağlı Intent yedeği. Belirteci Shizuku → Control Shizuku with automation apps bölümünden kopyalayın.</string>
+</resources>
