@@ -1,0 +1,40 @@
+name: Native soft reboot preflight
+
+on:
+  push:
+    branches:
+      - fix/native-kernelsu-soft-reboot
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Java 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Gradle cache
+        uses: gradle/actions/setup-gradle@v6
+      - name: Test, lint and assemble
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --build-cache \
+            :app:testDebugUnitTest \
+            :app:lintDebug \
+            :app:assembleRelease
+      - name: Soft-reboot invariants
+        run: |
+          set -euo pipefail
+          keeper=app/src/main/java/dev/busung/s25uroot/PostRootModuleKeeper.kt
+          grep -F '"${'$'}KSUD" soft-reboot' "$keeper"
+          ! grep -F 'ctl.restart zygote' "$keeper"
+          ! grep -F 'Meta-Overlayfsx ext4 image never became mounted' "$keeper"
+          ! grep -F '"${'$'}KSUD" late-load' "$keeper"
+          git diff --check HEAD^
