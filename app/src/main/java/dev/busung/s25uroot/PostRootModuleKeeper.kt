@@ -70,24 +70,24 @@ internal object PostRootModuleKeeper {
             append("chmod 0666 '$OWNER_LOG'\n")
             append("setsid sh '$KEEPER_PATH' >>'$OWNER_LOG' 2>&1 < /dev/null &\n")
             // Do not call the handoff successful merely because the keeper
-            // forked. Wait until every guard has passed and the keeper is at the
-            // exact point immediately before invoking `ksud soft-reboot`, or has
-            // proven another same-boot keeper already owns that request.
+            // forked. KernelSU's soft-reboot CLI daemonizes; this marker appears
+            // only after that CLI returned success, proving the native worker was
+            // accepted. A concurrent same-boot caller observes the same marker.
             append("i=0; while [ \"\$i\" -lt 50 ]; do ")
-            append("[ \"\$(cat '$START_MARKER' 2>/dev/null)\" = $expectedQuoted ] && { echo rmg-soft-reboot-requesting; exit 0; }; ")
+            append("[ \"\$(cat '$START_MARKER' 2>/dev/null)\" = $expectedQuoted ] && { echo rmg-soft-reboot-accepted; exit 0; }; ")
             append("i=\$((i+1)); sleep 0.1; done\n")
-            append("echo 'soft-reboot keeper did not reach request point' >&2\n")
+            append("echo 'soft-reboot keeper did not publish accepted request marker' >&2\n")
             append("tail -n 8 '$OWNER_LOG' >&2 2>/dev/null || true\n")
             append("exit 78\n")
         }
 
         val result = rootShell(installAndLaunch)
-        if (result.exitCode != 0 || !result.output.contains("rmg-soft-reboot-requesting")) {
+        if (result.exitCode != 0 || !result.output.contains("rmg-soft-reboot-accepted")) {
             val detail = result.output.trim().ifBlank { "keeper launcher exit ${result.exitCode}" }
             return ModuleKeeperLaunchResult(false, detail = detail.takeLast(320))
         }
 
-        onLog("[+] KernelSU soft-reboot keeper reached native request point")
+        onLog("[+] KernelSU native soft-reboot request accepted")
         onLog("[*] Keeper log: $OWNER_LOG")
         return ModuleKeeperLaunchResult(accepted = true)
     }
@@ -106,7 +106,7 @@ internal object PostRootModuleKeeper {
 
         EXPECTED_BOOT=${shellQuote(expectedBootId)}
         DONE='$DONE_MARKER'
-        REQUESTING='$START_MARKER'
+        ACCEPTED='$START_MARKER'
         LOCK='/data/local/tmp/.rmg-soft-reboot-owner'
 
         log() {
@@ -122,13 +122,13 @@ internal object PostRootModuleKeeper {
             awk 'NR == 1 { print ${'$'}1; exit }' "${'$'}DONE" 2>/dev/null
         }
 
-        publish_requesting() {
-            printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}REQUESTING" || return 1
-            chown 2000:2000 "${'$'}REQUESTING" 2>/dev/null
-            chmod 0664 "${'$'}REQUESTING" 2>/dev/null
+        publish_request_accepted() {
+            printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}ACCEPTED" || return 1
+            chown 2000:2000 "${'$'}ACCEPTED" 2>/dev/null
+            chmod 0664 "${'$'}ACCEPTED" 2>/dev/null
         }
 
-        publish_accepted() {
+        publish_done() {
             UP="${'$'}(cut -d. -f1 /proc/uptime 2>/dev/null)"
             TMP="${'$'}DONE.tmp.${'$'}${'$'}"
             printf '%s %s\n' "${'$'}EXPECTED_BOOT" "${'$'}UP" > "${'$'}TMP" || return 1
@@ -150,18 +150,17 @@ internal object PostRootModuleKeeper {
 
         if [ "${'$'}(marker_boot 2>/dev/null)" = "${'$'}EXPECTED_BOOT" ]; then
             log "soft-reboot accepted marker already belongs to this boot; nothing to do"
-            publish_requesting 2>/dev/null || true
+            publish_request_accepted 2>/dev/null || true
             exit 0
         fi
 
         if ! mkdir "${'$'}LOCK" 2>/dev/null; then
             LOCK_BOOT="${'$'}(cat "${'$'}LOCK/boot_id" 2>/dev/null)"
             if [ "${'$'}LOCK_BOOT" = "${'$'}EXPECTED_BOOT" ]; then
-                log "another soft-reboot keeper already owns this kernel boot"
-                # The request is already single-owned for this exact boot. Let
-                # the app treat the duplicate caller as accepted without ever
-                # issuing a second ksud soft-reboot command.
-                publish_requesting 2>/dev/null || true
+                log "another soft-reboot keeper already owns this kernel boot; waiting for its acceptance marker"
+                # Do not publish success on behalf of an owner that may still
+                # fail. The launcher polls the shared ACCEPTED marker and will
+                # succeed only if the real owner gets ksud's successful return.
                 exit 0
             fi
             rm -rf "${'$'}LOCK" 2>/dev/null
@@ -206,7 +205,7 @@ internal object PostRootModuleKeeper {
         fi
         if [ "${'$'}(marker_boot 2>/dev/null)" = "${'$'}EXPECTED_BOOT" ]; then
             log "another owner accepted soft reboot while waiting; no second request"
-            publish_requesting 2>/dev/null || true
+            publish_request_accepted 2>/dev/null || true
             exit 0
         fi
 
@@ -216,7 +215,6 @@ internal object PostRootModuleKeeper {
         # gives metamodules and ordinary modules their normal lifecycle ordering.
         # Do not gate this on mounts that the soft reboot itself is responsible
         # for creating, and do not restart zygote directly.
-        publish_requesting || exit 79
         log "requesting KernelSU native soft reboot"
         "${'$'}KSUD" soft-reboot
         RC=${'$'}?
@@ -225,13 +223,14 @@ internal object PostRootModuleKeeper {
             exit 72
         fi
 
-        # The CLI returning 0 means the native daemonized worker was accepted.
-        # Android userspace may stop this keeper immediately afterwards, so this
-        # marker records accepted ownership rather than claiming boot completion.
-        if publish_accepted; then
+        # `ksud soft-reboot` daemonizes internally. A zero return here means its
+        # detached native worker was created successfully. Publish the launcher
+        # handshake only now, eliminating the old keeper-start false positive.
+        publish_request_accepted || exit 79
+        if publish_done; then
             log "KernelSU native soft reboot accepted marker=${'$'}DONE"
         else
-            log "KernelSU native soft reboot accepted; marker write raced userspace stop"
+            log "KernelSU native soft reboot accepted; done-marker write raced userspace stop"
         fi
         exit 0
     """.trimIndent() + "\n"
