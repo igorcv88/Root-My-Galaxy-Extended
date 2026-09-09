@@ -10,10 +10,12 @@ class AutoRootBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
 
-        // Shizuku is a boot prerequisite/utility, not a post-root side effect.
-        // Start its paired local-ADB bootstrap immediately on every framework
-        // BOOT_COMPLETED, before any 60/120s Auto Root uptime gate. The service
-        // itself is Binder-first and becomes a no-op when Shizuku is already up.
+        // Shizuku is a boot utility, not part of root acquisition. Start its
+        // coordinator immediately on every framework BOOT_COMPLETED. After a
+        // KernelSU soft/userspace reboot the same kernel root is still active,
+        // so the service first tries an already-authorized root starter and can
+        // skip Wireless ADB entirely. On a cold boot without root it falls back
+        // to the existing Binder/Wi-Fi/ADB flow.
         runCatching { ShizukuBootService.startIfConfigured(context) }
             .onFailure { error ->
                 Log.w(
