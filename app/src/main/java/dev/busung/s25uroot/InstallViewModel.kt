@@ -196,7 +196,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 setPhase(InstallPhase.Exploiting, app.getString(R.string.status_exploit_running))
-                executeExploit(payloads.exploit)
+                executeExploit(payloads.exploit, profile.profileId)
 
                 setPhase(InstallPhase.LoadingKernelSu, app.getString(R.string.status_ksu_loading))
                 installKernelSu(payloads)
@@ -266,8 +266,13 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private suspend fun executeExploit(payload: File) {
+    private suspend fun executeExploit(payload: File, profileId: String) {
+        val strictTracefs = profileId == TRACEFS_ZZI4_PROFILE
         val shizuku = shizukuEnabled()
+        if (strictTracefs) {
+            require(shizuku) { "Exact ZZI4 tracefs route requires Shizuku shell transport" }
+            appendLog("[*] exploit route=tracefs-strict attempts=$TRACEFS_EXPLOIT_ATTEMPTS p0_fallback=off")
+        }
         val logFile = if (shizuku) File(SHIZUKU_LOG_PATH) else File(app.filesDir, "exploit.log")
         if (shizuku) {
             ShizukuController.exec(arrayOf("rm", "-f", SHIZUKU_LOG_PATH)).waitFor()
@@ -283,8 +288,15 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         val process = if (shizuku) {
             val stagedPayload = shizukuStage(payload, SHIZUKU_PAYLOAD_PATH, "755")
             ShizukuController.exec(
-                arrayOf("/system/bin/sh", "-c", "true"),
-                shizukuEnvironment(bootToken, stagedPayload.absolutePath, helper.absolutePath),
+                arrayOf(
+                    helper.absolutePath,
+                    "--run-payload",
+                    stagedPayload.absolutePath,
+                    helper.absolutePath,
+                    SHIZUKU_LOG_PATH,
+                ),
+                shizukuEnvironment(bootToken, helper.absolutePath, strictTracefs),
+                "/data/local/tmp",
             )
         } else {
             val processBuilder = ProcessBuilder(
@@ -295,10 +307,17 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 logFile.absolutePath,
             ).redirectErrorStream(true)
             processBuilder.environment().apply {
-                put("EXPLOIT_ATTEMPTS", EXPLOIT_ATTEMPTS)
-                put("P0_ATTEMPT_TIMEOUT_SEC", P0_ATTEMPT_TIMEOUT_SEC)
+                put(
+                    "EXPLOIT_ATTEMPTS",
+                    if (strictTracefs) TRACEFS_EXPLOIT_ATTEMPTS else EXPLOIT_ATTEMPTS,
+                )
                 put("EXPLOIT_ATTEMPT_TIMEOUT_SEC", EXPLOIT_ATTEMPT_TIMEOUT_SEC)
-                cachedP0Offset(bootToken)?.let { put(P0_OFFSET_ENV, it) }
+                if (strictTracefs) {
+                    put("SLIDE_SOURCE", "tracefs")
+                } else {
+                    put("P0_ATTEMPT_TIMEOUT_SEC", P0_ATTEMPT_TIMEOUT_SEC)
+                    cachedP0Offset(bootToken)?.let { put(P0_OFFSET_ENV, it) }
+                }
             }
             processBuilder.start()
         }
@@ -319,7 +338,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             while (process.isAlive) {
                 val rawLog = readLog()
                 if (rawLog != lastRawLog) {
-                    cacheP0Offset(bootToken, rawLog)
+                    if (!strictTracefs) cacheP0Offset(bootToken, rawLog)
                     publishExploitLog(logPrefix, rawLog)
                     lastRawLog = rawLog
                     lastProgressAt = SystemClock.elapsedRealtime()
@@ -336,7 +355,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
 
             val exitCode = process.waitFor()
             val rawLog = readLog()
-            cacheP0Offset(bootToken, rawLog)
+            if (!strictTracefs) cacheP0Offset(bootToken, rawLog)
             publishExploitLog(logPrefix, rawLog)
             // Both transports drain into `captured` during the poll loop, so
             // this never blocks on a child still holding the pipe open.
@@ -511,15 +530,21 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
 
     private fun shizukuEnvironment(
         bootToken: String?,
-        payloadPath: String,
         helperPath: String,
+        strictTracefs: Boolean,
     ): Array<String> = buildList {
-        add("EXPLOIT_ATTEMPTS=$EXPLOIT_ATTEMPTS")
-        add("P0_ATTEMPT_TIMEOUT_SEC=$P0_ATTEMPT_TIMEOUT_SEC")
+        add(
+            "EXPLOIT_ATTEMPTS=" +
+                if (strictTracefs) TRACEFS_EXPLOIT_ATTEMPTS else EXPLOIT_ATTEMPTS,
+        )
         add("EXPLOIT_ATTEMPT_TIMEOUT_SEC=$EXPLOIT_ATTEMPT_TIMEOUT_SEC")
         add("CVE43499_ROOT_HELPER=$helperPath")
-        add("LD_PRELOAD=$payloadPath")
-        cachedP0Offset(bootToken)?.let { add("$P0_OFFSET_ENV=$it") }
+        if (strictTracefs) {
+            add("SLIDE_SOURCE=tracefs")
+        } else {
+            add("P0_ATTEMPT_TIMEOUT_SEC=$P0_ATTEMPT_TIMEOUT_SEC")
+            cachedP0Offset(bootToken)?.let { add("$P0_OFFSET_ENV=$it") }
+        }
     }.toTypedArray()
 
     /**
@@ -629,6 +654,8 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     private fun File.readTextIfPresent(): String = if (exists()) readText() else ""
 
     companion object {
+        private const val TRACEFS_ZZI4_PROFILE = "pa3q-S938BXXUCZZI4"
+        private const val TRACEFS_EXPLOIT_ATTEMPTS = "4"
         private const val EXPLOIT_ATTEMPTS = "24"
         private const val P0_ATTEMPT_TIMEOUT_SEC = "45"
         private const val EXPLOIT_ATTEMPT_TIMEOUT_SEC = "120"
