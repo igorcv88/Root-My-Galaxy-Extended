@@ -37,7 +37,7 @@ internal class AutoRootRunner(
         onLog("[*] profile=${payloads.profile.profileId} transport=standalone source=offline")
 
         onStage(AutoRootStage.RunningExploit)
-        executeExploit(payloads.exploit, bootToken)
+        executeExploit(payloads.exploit, bootToken, payloads.profile.routePolicy)
 
         onStage(AutoRootStage.LoadingKernelSu)
         val autoLoaded = waitForAutoLateLoad(bootToken)
@@ -128,7 +128,14 @@ internal class AutoRootRunner(
         return finalGlobal?.exitCode == 0
     }
 
-    private suspend fun executeExploit(payload: File, bootToken: String) {
+    private suspend fun executeExploit(
+        payload: File,
+        bootToken: String,
+        policy: ExploitRoutePolicy,
+    ) {
+        // Auto Root runs the payload from the app's own domain, so it shares
+        // the profile's route policy but never claims the shell transport.
+        onLog(policy.describe(ExploitRoutePolicy.APP_TRANSPORT))
         val logFile = File(context.filesDir, "autoroot-exploit.log")
         logFile.delete()
 
@@ -142,12 +149,9 @@ internal class AutoRootRunner(
             helper.absolutePath,
             logFile.absolutePath,
         ).redirectErrorStream(true)
-        processBuilder.environment().apply {
-            put("EXPLOIT_ATTEMPTS", EXPLOIT_ATTEMPTS)
-            put("P0_ATTEMPT_TIMEOUT_SEC", P0_ATTEMPT_TIMEOUT_SEC)
-            put("EXPLOIT_ATTEMPT_TIMEOUT_SEC", EXPLOIT_ATTEMPT_TIMEOUT_SEC)
-            cachedP0Offset(bootToken)?.let { put(P0_OFFSET_ENV, it) }
-        }
+        processBuilder.environment().putAll(
+            policy.environment(cachedP0Offset(bootToken)),
+        )
 
         val originalThreadPriority = runCatching {
             Process.getThreadPriority(Process.myTid())
@@ -196,7 +200,7 @@ internal class AutoRootRunner(
             val exitCode = process.waitFor()
             val rawLog = readLog()
             publishExploitLog(rawLog)
-            cacheP0Offset(bootToken, rawLog)
+            if (policy.p0OffsetCache) cacheP0Offset(bootToken, rawLog)
 
             val earlyOutput = captured.toString().trim()
             require(exitCode == 0) {
@@ -320,9 +324,6 @@ internal class AutoRootRunner(
     private fun File.readTextIfPresent(): String = if (exists()) readText() else ""
 
     companion object {
-        private const val EXPLOIT_ATTEMPTS = "24"
-        private const val P0_ATTEMPT_TIMEOUT_SEC = "45"
-        private const val EXPLOIT_ATTEMPT_TIMEOUT_SEC = "120"
         private const val EXPLOIT_STALL_MILLIS = 90_000L
         private const val EXPLOIT_TOTAL_MILLIS = 900_000L
         private const val HELPER_TIMEOUT_MILLIS = 120_000L
@@ -330,7 +331,6 @@ internal class AutoRootRunner(
         private const val P0_CACHE = "p0_cache"
         private const val P0_CACHE_BOOT_TOKEN = "kernel_boot_id"
         private const val P0_CACHE_OFFSET = "offset"
-        private const val P0_OFFSET_ENV = "SLIDE_P0_OFFSET"
         private const val P0_OFFSET_MAX = 0x1f0000L
         private const val P0_OFFSET_MASK = 0xffffL
         private const val KSUD_PATH = "/data/local/tmp/ksud-s25u-kdp"

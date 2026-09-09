@@ -59,6 +59,7 @@ data class TargetProfile(
     val kernelSu: KernelSuArtifact,
     val rootHelper: RemoteArtifact? = null,
     val source: PayloadSource = PayloadSource.Online,
+    val routePolicy: ExploitRoutePolicy = ExploitRoutePolicy.LEGACY,
 ) {
     init {
         require(models.isNotEmpty()) { "Payload must support at least one model" }
@@ -179,6 +180,9 @@ data class SupportManifest(
                                 ),
                             ),
                             rootHelper = rootHelper?.artifact(),
+                            routePolicy = ExploitRoutePolicy.parse(
+                                payload.optJSONObject("routePolicy"),
+                            ),
                         ),
                     )
                 }
@@ -212,6 +216,7 @@ private fun TargetProfile.toJsonObject(): JSONObject = JSONObject()
             .put("managerPackage", kernelSu.managerPackage),
     )
     .apply { rootHelper?.let { put("rootHelper", it.toJsonObject()) } }
+    .put("routePolicy", routePolicy.toJsonObject())
 
 private fun ExactTargetMatch.toJsonObject(): JSONObject = JSONObject()
     .put("manufacturer", manufacturer)

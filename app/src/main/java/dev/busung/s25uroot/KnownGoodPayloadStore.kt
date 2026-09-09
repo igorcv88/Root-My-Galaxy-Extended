@@ -74,7 +74,8 @@ internal object KnownGoodPayloadStore {
             existing.profile.profileId == profile.profileId &&
                 existing.profile.exploit.sha256 == profile.exploit.sha256 &&
                 existing.profile.kernelSu.artifact.sha256 == profile.kernelSu.artifact.sha256 &&
-                existing.profile.rootHelper?.sha256 == profile.rootHelper?.sha256
+                existing.profile.rootHelper?.sha256 == profile.rootHelper?.sha256 &&
+                existing.profile.routePolicy == profile.routePolicy
         }.getOrDefault(false)
 
         if (!reusable) {
