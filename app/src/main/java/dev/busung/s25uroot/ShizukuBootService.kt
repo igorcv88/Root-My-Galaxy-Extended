@@ -176,9 +176,10 @@ class ShizukuBootService : Service() {
 
     /**
      * Try to start Shizuku from root that already exists for this kernel boot.
-     * This never requests root interactively: both bridges are accepted only
-     * after an `id` probe already returns uid=0. If neither bridge is currently
-     * authorized/usable, return immediately and leave the existing ADB flow alone.
+     * The helper bridge is preferred. Direct `su` is probed with a short timeout
+     * and is used for the starter only after that probe already returns uid=0.
+     * If neither bridge is usable, return immediately and leave the existing ADB
+     * fallback untouched.
      */
     private suspend fun tryExistingKernelSuRootStarterOnce(): ShizukuStarter.Outcome? {
         if (!NativeProbe.isKernelSuActive()) return null
@@ -194,23 +195,26 @@ class ShizukuBootService : Service() {
             )
         }
 
-        val directProbe = directSuShell("id")
+        val directProbe = directSuShell("id", DIRECT_SU_PROBE_TIMEOUT_MILLIS)
         if (directProbe.exitCode == 0 && directProbe.output.contains("uid=0")) {
             Log.i(TAG, "KernelSU app root already authorized after userspace boot; starting Shizuku directly with su")
             return ShizukuStarter.start(
                 context = this,
-                shell = ::directSuShell,
+                shell = { command -> directSuShell(command, DIRECT_SU_COMMAND_TIMEOUT_MILLIS) },
                 binderTimeoutMillis = BINDER_START_TIMEOUT_MILLIS,
                 onLog = { message -> Log.i(TAG, message) },
             )
         }
 
-        Log.i(TAG, "KernelSU is active but no non-interactive app root bridge is authorized; keeping existing ADB fallback")
+        Log.i(TAG, "KernelSU is active but no usable app root bridge is available; keeping existing ADB fallback")
         return null
     }
 
-    /** Execute only an already-authorized KernelSU su path; bounded so boot never stalls on it. */
-    private fun directSuShell(command: String): LocalAdbClient.ShellResult {
+    /** Execute an already-available KernelSU su path with a caller-selected bound. */
+    private fun directSuShell(
+        command: String,
+        timeoutMillis: Long,
+    ): LocalAdbClient.ShellResult {
         val process = runCatching {
             ProcessBuilder("su", "-c", command)
                 .redirectErrorStream(true)
@@ -240,7 +244,7 @@ class ShizukuBootService : Service() {
         }
 
         val finished = runCatching {
-            process.waitFor(DIRECT_SU_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+            process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)
         }.getOrDefault(false)
         if (!finished) {
             process.destroy()
@@ -258,7 +262,7 @@ class ShizukuBootService : Service() {
         val body = output.toString().trim()
         return LocalAdbClient.ShellResult(
             code,
-            if (!finished && body.isBlank()) "KernelSU su probe timed out" else body,
+            if (!finished && body.isBlank()) "KernelSU su command timed out" else body,
         )
     }
 
@@ -347,7 +351,6 @@ class ShizukuBootService : Service() {
     }
 
     private suspend fun awaitBinder() {
-        // Keep this wait event-driven without inventing a long polling timeout.
         while (currentCoroutineContext().isActive) {
             if (ShizukuController.awaitRunning(BINDER_EVENT_WAIT_CHUNK_MILLIS)) return
         }
@@ -421,7 +424,8 @@ class ShizukuBootService : Service() {
         private const val BINDER_EVENT_WAIT_CHUNK_MILLIS = 60_000L
         private const val AUTO_ROOT_GUARD_BEFORE_MILLIS = 10_000L
         private const val AUTO_ROOT_GUARD_AFTER_MILLIS = 45_000L
-        private const val DIRECT_SU_TIMEOUT_MILLIS = 2_000L
+        private const val DIRECT_SU_PROBE_TIMEOUT_MILLIS = 2_000L
+        private const val DIRECT_SU_COMMAND_TIMEOUT_MILLIS = 15_000L
 
         fun startIfConfigured(context: Context) {
             if (!isConfigured(context)) return
@@ -434,9 +438,6 @@ class ShizukuBootService : Service() {
 
         private fun isConfigured(context: Context): Boolean {
             if (!AppPreferences.startShizukuOnBoot(context)) return false
-            // Root after a soft reboot does not require an ADB pairing/token. Keep
-            // legacy configuration acceptance, but also allow active KernelSU to
-            // start the service so the immediate root-first path can run.
             return NativeProbe.isKernelSuActive() ||
                 AppPreferences.adbPaired(context) ||
                 AppPreferences.shizukuAutomationToken(context).isNotBlank()
