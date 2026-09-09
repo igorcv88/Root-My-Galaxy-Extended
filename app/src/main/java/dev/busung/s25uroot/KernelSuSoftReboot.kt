@@ -12,14 +12,14 @@ data class SoftRebootResult(
 /**
  * Compatibility facade for the existing install/Auto Root call sites.
  *
- * The old implementation pre-armed a bootstrap-daemon shell and treated a
- * successful stdin write as proof that `ksud soft-reboot` started. That could
- * return a false positive after KernelSU changed the live security state.
+ * The historical implementation pre-armed a bootstrap-daemon shell before
+ * KernelSU late-load. That is no longer necessary: after KernelSU is verified,
+ * PostRootAutomation obtains an already-working root transport and launches a
+ * detached single-owner keeper. The keeper consumes the installed /data/adb/ksud
+ * and delegates the userspace transition to KernelSU's native `soft-reboot`.
  *
- * Soft reboot is now a post-root operation implemented by PostRootAutomation:
- * local Wireless ADB + KernelSU `su`, ksud lifecycle stages, then zygote restart.
- * This mirrors the device-tested HyperRamzey route and produces observable
- * command results instead of relying on a second bootstrap-daemon connection.
+ * Important invariant: this facade never stages/replaces ksud, never calls
+ * late-load, and never restarts zygote directly.
  */
 object KernelSuSoftReboot {
     suspend fun arm(

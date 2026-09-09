@@ -18,11 +18,11 @@ internal data class PostRootResult(
  * exploit path: callers invoke it only after KernelSU has been verified.
  *
  * An already-running Shizuku Binder is the preferred post-root shell bridge.
- * When the Binder is absent, the app-authenticated v0266 root-helper daemon is
- * tried next so the Shizuku starter does not depend on Wireless ADB. Local ADB
- * remains compatibility-only fallback. Module activation/zygote refresh remains
- * owned by one detached root keeper and the app never replays KernelSU lifecycle
- * stages.
+ * When the Binder is absent, the app-authenticated root-helper daemon is tried
+ * next so the Shizuku starter does not depend on Wireless ADB. Local ADB remains
+ * compatibility-only fallback. Optional soft reboot is delegated to one detached
+ * root keeper, which invokes KernelSU's native soft-reboot command and never
+ * replays late-load/staging or restarts zygote directly.
  */
 internal object PostRootAutomation {
     suspend fun run(
@@ -276,7 +276,7 @@ internal object PostRootAutomation {
         if (bootId.isNullOrBlank()) {
             return PostRootResult(
                 shizukuStarted = shizukuStarted,
-                detail = "kernel boot id unavailable before module refresh",
+                detail = "kernel boot id unavailable before KernelSU soft reboot",
             )
         }
 
@@ -286,7 +286,7 @@ internal object PostRootAutomation {
             onLog = onLog,
         )
         if (!keeper.accepted) {
-            onLog("[-] Module keeper launch failed: ${keeper.detail}")
+            onLog("[-] KernelSU soft-reboot keeper launch failed: ${keeper.detail}")
             return PostRootResult(
                 shizukuStarted = shizukuStarted,
                 detail = keeper.detail,
@@ -294,14 +294,14 @@ internal object PostRootAutomation {
         }
 
         if (keeper.alreadyDone) {
-            onLog("[+] Module refresh marker already satisfied for boot_id=$bootId")
+            onLog("[+] KernelSU soft reboot already accepted for boot_id=$bootId")
         } else {
-            onLog("[*] Module keeper confirmed running for boot_id=$bootId")
+            onLog("[*] KernelSU soft-reboot keeper confirmed running for boot_id=$bootId")
         }
         return PostRootResult(
             softRebootStarted = true,
             shizukuStarted = shizukuStarted,
-            detail = "post-root automation accepted",
+            detail = "KernelSU native soft-reboot handoff accepted",
         )
     }
 

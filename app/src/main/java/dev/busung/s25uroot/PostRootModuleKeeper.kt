@@ -7,16 +7,17 @@ internal data class ModuleKeeperLaunchResult(
 )
 
 /**
- * Single post-root module-refresh owner.
+ * Single post-root soft-reboot owner.
  *
- * The app never replays KernelSU post-fs-data/services/boot-completed. v0266
- * late-load already owns module activation; this keeper only waits for that
- * state to become usable, performs one guarded zygote respawn, and publishes a
- * boot-id keyed completion marker.
+ * KernelSU late-load remains the only owner of module loading/staging. This
+ * keeper never replays late-load, never replaces /data/adb/ksud, and never
+ * restarts zygote directly. Once KernelSU is verified, it only performs a
+ * boot-scoped/idempotent handoff to KernelSU's own `ksud soft-reboot` command.
+ * That native path owns stop/start plus the normal KernelSU userspace lifecycle.
  */
 internal object PostRootModuleKeeper {
-    const val DONE_MARKER = "/data/local/tmp/.cve43499-modules-done"
-    const val START_MARKER = "/data/local/tmp/.cve43499-modules-keeper-started"
+    const val DONE_MARKER = "/data/local/tmp/.rmg-soft-reboot-accepted"
+    const val START_MARKER = "/data/local/tmp/.rmg-soft-reboot-requesting"
     const val OWNER_LOG = "/data/local/tmp/rmg-postroot-keeper.log"
     private const val KEEPER_PATH = "/data/local/tmp/rmg-postroot-keeper.sh"
 
@@ -33,9 +34,10 @@ internal object PostRootModuleKeeper {
     )
 
     /**
-     * Launch through any already-available root command transport. This lets an
-     * already-running Shizuku Binder be the preferred post-root bridge while
-     * retaining local ADB as a compatibility fallback.
+     * Launch through any verified root transport. An existing Shizuku Binder is
+     * preferred by PostRootAutomation; the authenticated app root helper and
+     * local ADB remain fallbacks. The transport only launches this detached
+     * keeper and does not participate in KernelSU late-load/staging.
      */
     fun launch(
         rootShell: (String) -> LocalAdbClient.ShellResult,
@@ -48,7 +50,7 @@ internal object PostRootModuleKeeper {
 
         val existing = rootShell("cat '$DONE_MARKER' 2>/dev/null").output.trim()
         if (markerMatchesBoot(existing, expectedBootId)) {
-            onLog("[+] Module/zygote refresh already completed for this kernel boot")
+            onLog("[+] KernelSU soft reboot already accepted for this kernel boot")
             return ModuleKeeperLaunchResult(accepted = true, alreadyDone = true)
         }
 
@@ -67,21 +69,25 @@ internal object PostRootModuleKeeper {
             append(": > '$OWNER_LOG'\n")
             append("chmod 0666 '$OWNER_LOG'\n")
             append("setsid sh '$KEEPER_PATH' >>'$OWNER_LOG' 2>&1 < /dev/null &\n")
-            // A successful fork is not enough: require the detached keeper
-            // itself to prove that it reached its first executable action.
-            append("i=0; while [ \"\$i\" -lt 30 ]; do ")
-            append("[ \"\$(cat '$START_MARKER' 2>/dev/null)\" = $expectedQuoted ] && { echo rmg-keeper-started; exit 0; }; ")
+            // Do not call the handoff successful merely because the keeper
+            // forked. KernelSU's soft-reboot CLI daemonizes; this marker appears
+            // only after that CLI returned success, proving the native worker was
+            // accepted. A concurrent same-boot caller observes the same marker.
+            append("i=0; while [ \"\$i\" -lt 50 ]; do ")
+            append("[ \"\$(cat '$START_MARKER' 2>/dev/null)\" = $expectedQuoted ] && { echo rmg-soft-reboot-accepted; exit 0; }; ")
             append("i=\$((i+1)); sleep 0.1; done\n")
-            append("echo 'keeper did not publish start marker' >&2; exit 78\n")
+            append("echo 'soft-reboot keeper did not publish accepted request marker' >&2\n")
+            append("tail -n 8 '$OWNER_LOG' >&2 2>/dev/null || true\n")
+            append("exit 78\n")
         }
 
         val result = rootShell(installAndLaunch)
-        if (result.exitCode != 0 || !result.output.contains("rmg-keeper-started")) {
+        if (result.exitCode != 0 || !result.output.contains("rmg-soft-reboot-accepted")) {
             val detail = result.output.trim().ifBlank { "keeper launcher exit ${result.exitCode}" }
-            return ModuleKeeperLaunchResult(false, detail = detail.takeLast(240))
+            return ModuleKeeperLaunchResult(false, detail = detail.takeLast(320))
         }
 
-        onLog("[+] Single-owner module keeper confirmed running; app will not replay KernelSU lifecycle")
+        onLog("[+] KernelSU native soft-reboot request accepted")
         onLog("[*] Keeper log: $OWNER_LOG")
         return ModuleKeeperLaunchResult(accepted = true)
     }
@@ -95,17 +101,14 @@ internal object PostRootModuleKeeper {
 
     internal fun buildKeeperScript(expectedBootId: String): String = """
         #!/system/bin/sh
-        # Root My Galaxy post-root keeper.
-        # Single owner: no KernelSU lifecycle replay here.
+        # Root My Galaxy post-root soft-reboot keeper.
+        # Single owner: never replay KernelSU late-load or replace its daemon.
 
         EXPECTED_BOOT=${shellQuote(expectedBootId)}
         DONE='$DONE_MARKER'
-        STARTED='$START_MARKER'
-        LOCK='/data/local/tmp/.cve43499-modules-owner'
-        OVERLAY_META='/data/adb/modules/meta-overlayfsx'
-        OVERLAY_HOME='/data/adb/metamodule'
-        OVERLAY_DATA='/data/adb/overlayfsx-data'
-        VIPER_META='/data/adb/modules/ViPER4Android-RE-AIDL'
+        ACCEPTED='$START_MARKER'
+        LOCK='/data/local/tmp/.rmg-soft-reboot-owner'
+        KSUD='/data/adb/ksud'
 
         log() {
             echo "[keeper] ${'$'}(date +%s 2>/dev/null) ${'$'}*"
@@ -120,33 +123,45 @@ internal object PostRootModuleKeeper {
             awk 'NR == 1 { print ${'$'}1; exit }' "${'$'}DONE" 2>/dev/null
         }
 
-        zygote_pids() {
-            echo "${'$'}(pidof zygote64 2>/dev/null) ${'$'}(pidof zygote 2>/dev/null)" |
-                sed 's/^ *//; s/  */ /g; s/ *${'$'}//'
+        publish_request_accepted() {
+            printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}ACCEPTED" || return 1
+            chown 2000:2000 "${'$'}ACCEPTED" 2>/dev/null
+            chmod 0664 "${'$'}ACCEPTED" 2>/dev/null
         }
 
-        # First executable action visible to the launcher. If this marker never
-        # appears, the app must not claim that a detached keeper is running.
-        printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}STARTED" || exit 59
-        chown 2000:2000 "${'$'}STARTED" 2>/dev/null
-        chmod 0664 "${'$'}STARTED" 2>/dev/null
+        publish_done() {
+            UP="${'$'}(cut -d. -f1 /proc/uptime 2>/dev/null)"
+            TMP="${'$'}DONE.tmp.${'$'}${'$'}"
+            printf '%s %s\n' "${'$'}EXPECTED_BOOT" "${'$'}UP" > "${'$'}TMP" || return 1
+            chown 2000:2000 "${'$'}TMP" 2>/dev/null
+            chmod 0664 "${'$'}TMP" 2>/dev/null
+            restorecon "${'$'}TMP" >/dev/null 2>&1 || true
+            mv -f "${'$'}TMP" "${'$'}DONE" || return 1
+            chown 2000:2000 "${'$'}DONE" 2>/dev/null
+            chmod 0664 "${'$'}DONE" 2>/dev/null
+        }
+
         log "keeper process started boot_id=${'$'}EXPECTED_BOOT pid=${'$'}${'$'}"
 
         BOOT="${'$'}(current_boot)"
         if [ -z "${'$'}BOOT" ] || [ "${'$'}BOOT" != "${'$'}EXPECTED_BOOT" ]; then
-            log "boot id changed before keeper start; refusing userspace restart"
+            log "boot id changed before soft-reboot handoff; refusing restart"
             exit 60
         fi
 
         if [ "${'$'}(marker_boot 2>/dev/null)" = "${'$'}EXPECTED_BOOT" ]; then
-            log "done marker already belongs to this boot; nothing to do"
+            log "soft-reboot accepted marker already belongs to this boot; nothing to do"
+            publish_request_accepted 2>/dev/null || true
             exit 0
         fi
 
         if ! mkdir "${'$'}LOCK" 2>/dev/null; then
             LOCK_BOOT="${'$'}(cat "${'$'}LOCK/boot_id" 2>/dev/null)"
             if [ "${'$'}LOCK_BOOT" = "${'$'}EXPECTED_BOOT" ]; then
-                log "another keeper already owns this kernel boot"
+                log "another soft-reboot keeper already owns this kernel boot; waiting for its acceptance marker"
+                # Do not publish success on behalf of an owner that may still
+                # fail. The launcher polls the shared ACCEPTED marker and will
+                # succeed only if the real owner gets ksud's successful return.
                 exit 0
             fi
             rm -rf "${'$'}LOCK" 2>/dev/null
@@ -172,182 +187,50 @@ internal object PostRootModuleKeeper {
             exit 63
         fi
 
-        # KernelSU late-load already owns module activation. Merely require its
-        # executable state to exist; never invoke lifecycle stages here.
-        KSUD=''
-        for p in /data/adb/ksud /data/adb/ksu/bin/ksud /data/local/tmp/ksud-s25u-kdp; do
-            if [ -x "${'$'}p" ]; then KSUD="${'$'}p"; break; fi
-        done
-        if [ -z "${'$'}KSUD" ]; then
-            log "KernelSU loader not found after verified late-load"
+        # Consume only the daemon installed by the already-verified late-load.
+        # Do not fall back to a target-named /data/local/tmp ksud: on a multi-
+        # firmware app that could select a stale binary embedding the wrong LKM.
+        # Missing /data/adb/ksud is therefore a post-root failure, not permission
+        # to stage, replace, or re-run late-load from here.
+        if [ ! -x "${'$'}KSUD" ]; then
+            log "installed KernelSU daemon missing or not executable at ${'$'}KSUD"
             exit 64
         fi
-        log "KernelSU late-load state accepted via ${'$'}KSUD"
-
-        # Meta-Overlayfsx-ViPER-safe readiness. viper-safe.4 mounts its ext4
-        # image outside the metamodule directory so KernelSU can replace the
-        # module on updates without EBUSY. Accept the legacy path only for older
-        # installed releases while the migration is being rolled out.
-        if [ -d "${'$'}OVERLAY_META" ] && [ ! -f "${'$'}OVERLAY_META/disable" ]; then
-            mounted=0
-            overlay_mnt=''
-            i=0
-            while [ "${'$'}i" -lt 45 ]; do
-                if grep -F " ${'$'}OVERLAY_DATA/mnt " /proc/mounts >/dev/null 2>&1; then
-                    mounted=1
-                    overlay_mnt="${'$'}OVERLAY_DATA/mnt"
-                    break
-                fi
-                if grep -F " ${'$'}OVERLAY_HOME/mnt " /proc/mounts >/dev/null 2>&1; then
-                    mounted=1
-                    overlay_mnt="${'$'}OVERLAY_HOME/mnt"
-                    break
-                fi
-                i=${'$'}((i + 1))
-                sleep 1
-            done
-            if [ "${'$'}mounted" != "1" ]; then
-                log "Meta-Overlayfsx ext4 image never became mounted"
-                exit 65
-            fi
-            log "Meta-Overlayfsx ext4 image ready at ${'$'}overlay_mnt"
-
-            if [ -x "${'$'}OVERLAY_HOME/overlayfsx" ]; then
-                inspect_ok=0
-                i=0
-                while [ "${'$'}i" -lt 10 ]; do
-                    if "${'$'}OVERLAY_HOME/overlayfsx" inspect -r 2>/dev/null |
-                        grep -F '\"status\": \"success\"' >/dev/null 2>&1; then
-                        inspect_ok=1
-                        break
-                    fi
-                    i=${'$'}((i + 1))
-                    sleep 2
-                done
-                if [ "${'$'}inspect_ok" != "1" ]; then
-                    log "OverlayFSx kernel inspector did not report success"
-                    exit 66
-                fi
-            fi
-
-            if [ -d "${'$'}VIPER_META" ] && [ ! -f "${'$'}VIPER_META/disable" ] &&
-                [ ! -f "${'$'}VIPER_META/skip_mount" ]; then
-                if grep -E '^KSU /(vendor|system) overlay .*ViPER4Android-RE-AIDL' \
-                    /proc/mounts >/dev/null 2>&1; then
-                    log "unsafe broad ViPER root overlay detected; refusing zygote restart"
-                    exit 67
-                fi
-
-                viper_ready=0
-                i=0
-                while [ "${'$'}i" -lt 30 ]; do
-                    if grep -F 'Granular ViPER mounting completed without partition-root overlays' \
-                        "${'$'}OVERLAY_HOME/overlayfsx.log" >/dev/null 2>&1; then
-                        viper_ready=1
-                        break
-                    fi
-                    i=${'$'}((i + 1))
-                    sleep 1
-                done
-                if [ "${'$'}viper_ready" != "1" ]; then
-                    log "ViPER-safe granular mount completion was not observed"
-                    exit 68
-                fi
-                log "Meta-Overlayfsx-ViPER-safe granular mounts verified"
-            fi
-        fi
-
-        OLD="${'$'}(zygote_pids)"
-        if [ -z "${'$'}OLD" ]; then
-            log "no zygote process found"
-            exit 69
-        fi
-        last="${'$'}OLD"
-        stable=0
-        i=0
-        while [ "${'$'}i" -lt 20 ]; do
-            sleep 1
-            now="${'$'}(zygote_pids)"
-            if [ -n "${'$'}now" ] && [ "${'$'}now" = "${'$'}last" ]; then
-                stable=${'$'}((stable + 1))
-            else
-                stable=0
-                last="${'$'}now"
-            fi
-            [ "${'$'}stable" -ge 3 ] && break
-            i=${'$'}((i + 1))
-        done
-        if [ "${'$'}stable" -lt 3 ]; then
-            log "zygote set did not stabilize; refusing restart"
-            exit 70
-        fi
-        OLD="${'$'}last"
+        log "KernelSU soft-reboot binary accepted via ${'$'}KSUD"
 
         if [ "${'$'}(current_boot)" != "${'$'}EXPECTED_BOOT" ]; then
-            log "kernel reboot detected before zygote restart; aborting"
+            log "kernel reboot detected before KernelSU soft reboot; aborting"
             exit 71
         fi
         if [ "${'$'}(marker_boot 2>/dev/null)" = "${'$'}EXPECTED_BOOT" ]; then
-            log "another owner completed while waiting; no restart needed"
+            log "another owner accepted soft reboot while waiting; no second request"
+            publish_request_accepted 2>/dev/null || true
             exit 0
         fi
 
-        # Ask Android init to own the zygote transition. Sending SIGKILL to
-        # zygote directly is indistinguishable from a crash to Zygisk Next's
-        # crash guard and can leave the replacement zygote uninjected.
-        RESTART_OUT="${'$'}(/system/bin/setprop ctl.restart zygote 2>&1)"
-        RESTART_RC=${'$'}?
-        if [ "${'$'}RESTART_RC" != "0" ]; then
-            log "init-managed zygote restart request failed rc=${'$'}RESTART_RC out=${'$'}RESTART_OUT"
+        # KernelSU owns the userspace transition. Its native soft-reboot path
+        # daemonizes in init's process group, switches to PID1's mount namespace,
+        # performs stop/post-fs-data/start/services/boot-completed, and therefore
+        # gives metamodules and ordinary modules their normal lifecycle ordering.
+        # Do not gate this on mounts that the soft reboot itself is responsible
+        # for creating, and do not restart zygote directly.
+        log "requesting KernelSU native soft reboot"
+        "${'$'}KSUD" soft-reboot
+        RC=${'$'}?
+        if [ "${'$'}RC" != "0" ]; then
+            log "KernelSU native soft reboot request failed rc=${'$'}RC"
             exit 72
         fi
-        log "init-managed zygote restart requested; old pids=${'$'}OLD"
 
-        NEW=''
-        i=0
-        while [ "${'$'}i" -lt 30 ]; do
-            sleep 1
-            now="${'$'}(zygote_pids)"
-            if [ -n "${'$'}now" ] && [ "${'$'}now" != "${'$'}OLD" ]; then
-                NEW="${'$'}now"
-                break
-            fi
-            i=${'$'}((i + 1))
-        done
-        if [ -z "${'$'}NEW" ]; then
-            log "new zygote did not appear within 30s after init-managed restart"
-            exit 73
+        # `ksud soft-reboot` daemonizes internally. A zero return here means its
+        # detached native worker was created successfully. Publish the launcher
+        # handshake only now, eliminating the old keeper-start false positive.
+        publish_request_accepted || exit 79
+        if publish_done; then
+            log "KernelSU native soft reboot accepted marker=${'$'}DONE"
+        else
+            log "KernelSU native soft reboot accepted; done-marker write raced userspace stop"
         fi
-
-        if [ "${'$'}(current_boot)" != "${'$'}EXPECTED_BOOT" ]; then
-            log "kernel boot id changed during zygote restart; no done marker"
-            exit 74
-        fi
-
-        i=0
-        while [ "${'$'}i" -lt 30 ]; do
-            if [ -n "${'$'}(pidof system_server 2>/dev/null)" ] &&
-                [ "${'$'}(getprop sys.boot_completed 2>/dev/null)" = "1" ]; then
-                break
-            fi
-            i=${'$'}((i + 1))
-            sleep 1
-        done
-        if [ -z "${'$'}(pidof system_server 2>/dev/null)" ]; then
-            log "system_server not healthy after zygote restart"
-            exit 75
-        fi
-
-        UP="${'$'}(cut -d. -f1 /proc/uptime 2>/dev/null)"
-        TMP="${'$'}DONE.tmp.${'$'}${'$'}"
-        printf '%s %s\n' "${'$'}EXPECTED_BOOT" "${'$'}UP" > "${'$'}TMP" || exit 76
-        chown 2000:2000 "${'$'}TMP" 2>/dev/null
-        chmod 0664 "${'$'}TMP" 2>/dev/null
-        restorecon "${'$'}TMP" >/dev/null 2>&1 || true
-        mv -f "${'$'}TMP" "${'$'}DONE" || exit 77
-        chown 2000:2000 "${'$'}DONE" 2>/dev/null
-        chmod 0664 "${'$'}DONE" 2>/dev/null
-        log "zygote refresh complete; new pids=${'$'}NEW marker=${'$'}DONE"
         exit 0
     """.trimIndent() + "\n"
 

@@ -5,14 +5,14 @@
 <p align="center">
   <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/igorcv88/Root-My-Galaxy-S938B?label=release" /></a>
   <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/igorcv88/Root-My-Galaxy-S938B/total" /></a>
-  <img alt="Android" src="https://img.shields.io/badge/Android-16-3DDC84?logo=android&amp;logoColor=white" />
+  <img alt="Android" src="https://img.shields.io/badge/Android-16%20%2F%2017-3DDC84?logo=android&amp;logoColor=white" />
   <img alt="KernelSU" src="https://img.shields.io/badge/KernelSU-3.3.0-2f81f7" />
   <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/actions/workflows/release.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/igorcv88/Root-My-Galaxy-S938B/release.yml?branch=main&amp;label=build" /></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/igorcv88/Root-My-Galaxy-S938B" /></a>
 </p>
 
 <p align="center">
-  <strong>Temporary KernelSU root for the maintained Samsung Galaxy S25 Ultra firmware without unlocking the bootloader or flashing a modified boot image.</strong>
+  <strong>Temporary KernelSU root for maintained Samsung Galaxy S25 Ultra firmware without unlocking the bootloader or flashing a modified boot image.</strong>
 </p>
 
 <p align="center">
@@ -24,218 +24,190 @@
 </p>
 
 > [!WARNING]
-> This software uses a kernel exploit. A failed run can panic/reboot the device. Use it only on a device you own or are explicitly authorized to test.
+> This software uses a kernel exploit. A failed run can panic or reboot the device. Use it only on a device you own or are explicitly authorized to test.
 
-## Maintained target
+## Maintained S938B profiles
 
-| | Current profile |
-| --- | --- |
-| Device | Galaxy S25 Ultra `SM-S938B` (`pa3q`) |
-| Firmware | `S938BXXSBCZG3` |
-| Build display | `BP4A.251205.006.S938BXXSBCZG3` |
-| Android | Android 16 / API 36 |
-| Kernel | `6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k` |
-| ABI / page size | `arm64-v8a` / 4K |
+| Profile | Android | Kernel | Status |
+| --- | --- | --- | --- |
+| `pa3q-S938BXXSBCZG3` | Android 16 / API 36 | `6.6.98-android15-8-pd6ff1cd-abogkiS938BXXSBCZG3-4k` | Legacy maintained profile |
+| `pa3q-S938BXXUCZZI4` | Android 17 / API 37 | `6.6.127-android15-8-p33f4ffe-abogkiS938BXXUCZZI4-4k` | Current One UI 9 beta profile; exploit + KernelSU hardware validated |
 
-Firmware or kernel updates can invalidate this exact profile.
+ZZI4 exact build identity is `CP2A.260605.016.S938BXXUCZZI4`, SPL `2026-08-05`, ABI `arm64-v8a`, 4K pages. Firmware or kernel updates can invalidate offsets, Tracefs behavior or the exact KernelSU module pair.
 
-## What this fork adds
+## Current architecture
 
-Compared with the base Root My Galaxy app, this fork currently adds or changes:
-
-- exact CZG3 identity matching and SHA-256-verified payload/helper coupling;
-- KernelSU 3.3.0 / 32601;
-- explicit **Manual Online** and **Manual Offline** modes;
-- a last-known-good offline payload set published only after a successful verified Manual Online root;
-- **Auto Root** that is always Offline + Standalone and never depends on Shizuku or network access to acquire root;
-- a foreground boot gate plus a fresh `:autoroot_exec` process for the exploit handoff;
-- an independent Auto Root total-uptime floor (default 60 s on CZG3) while Manual keeps its own diagnostic launch setting;
-- v0266 root-helper auto-late-load support with app-side late-load fallback;
-- persistent local Wireless ADB pairing and automatic Shizuku restart after root;
-- a **single-owner root-side module keeper** that does not replay KernelSU lifecycle stages and performs at most one guarded zygote respawn per kernel boot;
-- explicit readiness guards for `Meta-Overlayfsx-ViPER-safe`, including its ext4 image, kernel inspector and granular ViPER mount completion;
-- installation History with captured logs, per-run export and ZIP export of all or selected completed runs.
-
-The exploit race itself remains deliberately small: the app does not reintroduce the former External Observer, pselect gate, SIGRETURN interception, syscall wrappers or race telemetry into the critical path.
-
-## Root path
-
-The current intended flow is:
+The app now keeps exploit acquisition, KernelSU restoration and post-root userspace automation as separate layers:
 
 ```text
 Manual Online / Manual Offline / Auto Root
                   ↓
-          verified v0266 set
+       exact target profile + routePolicy
                   ↓
-       CVE-2026-43499 exploit
+       CVE-2026-43499 target payload
                   ↓
           bootstrap UID 0
                   ↓
- root helper auto-late-loads KernelSU
+ target root helper auto-late-loads KernelSU
                   ↓
-     KernelSU control verification
+ KernelSU control + PID1 mount readiness
                   ↓
-       root result is checkpointed
+     successful root is checkpointed
                   ↓
-  optional post-root userspace actions
-                  ↓
-   Shizuku bootstrap (if enabled)
-                  ↓
- detached single-owner module keeper
-                  ↓
-     one guarded zygote respawn
+ optional Shizuku / native soft reboot
 ```
 
-The v0266 helper can late-load KernelSU immediately after root lands, avoiding a second client round trip. If that path is not ready, the app retains the explicit client `--late-load` fallback.
+The app never makes Wireless ADB or Shizuku a dependency of root acquisition. Auto Root remains Offline + Standalone and uses only the last-known-good payload set.
 
-## Manual Online and Offline
+## ZZI4 exploit route
 
-**Manual Online** resolves the exact support feed, downloads the exploit and KernelSU payload from a commit-pinned revision, verifies size/SHA-256 and verifies that the APK-bundled root helper matches the feed's `rootHelper` metadata.
+ZZI4 uses one feed-defined `routePolicy` shared by Manual and Auto Root. Current policy is:
 
-Only after exploit success and KernelSU verification does the app publish that exact set as the new last-known-good cache.
+```text
+slideRoute=auto
+attempts=24
+attemptTimeoutSec=120
+p0AttemptTimeoutSec=45
+p0OffsetCache=true
+prefersShellTransport=true
+```
 
-**Manual Offline** uses only that cache. It performs no hidden network fallback. Auto Root uses the same verified offline set.
+When shell/Tracefs access is available, the payload derives the KASLR slide from Tracefs. On this firmware the slide and data-addressing modes are intentionally separated: even when Tracefs supplies the slide, kernel data writes use the physical-load alias rather than the canonical direct map.
 
-Caches created before v0266 root-helper metadata are intentionally rejected once the new helper is shipped; run Manual Online once to establish a helper-bound cache.
+The ZZI4 application payload therefore enables:
+
+- `APP_TRACEFS_SLIDE=1`;
+- `APP_TRACEFS_PHYS_ALIAS_DATA=1`;
+- `APP_PHYS_P0_ORACLE=1` as explicit fallback/oracle support;
+- a bounded `APP_FOPS_RETRY_BUDGET=8`;
+- shared FOPS retry state so a landed write terminates further shots;
+- delay rotation across retry shots rather than repeating one stale delay.
+
+The first hardware validation of the current physical-alias build completed in supervisor attempt 1 with Tracefs KASLR, `window=1`, a successful physical write and a complete KernelSU handoff. The more invasive sync-pselect synchronization experiment remains intentionally parked and is not part of the production path.
+
+## CZG3 compatibility
+
+CZG3 remains supported as a separate exact profile. It retains its own offsets, route defaults and KernelSU artifact. Target policy is data, not app hardcoding, so adding or changing one firmware profile does not silently alter another.
+
+Manual keeps its historical diagnostic/minimum-uptime control; Auto Root has its own independent total-uptime floor. The two preferences are intentionally not coupled.
+
+## Payload integrity and offline cache
+
+Manual Online resolves `support/targets-v3.json`, downloads the exact target artifacts, verifies size and SHA-256, and verifies that the APK-bundled root helper matches the target feed.
+
+Only after exploit success and KernelSU global readiness does the app publish that exact set as the last-known-good offline cache. Cache identity includes exploit, KernelSU, root helper and route policy, so a feed-only policy change can refresh the cache even when binary hashes stay identical.
+
+Manual Offline and Auto Root never fall back to hidden network downloads.
+
+## KernelSU late-load on Samsung
+
+The S938B KernelSU path is a Samsung-specific KernelSU 3.3.0 forward port with KDP/RKP/DEFEX handling and no unsafe generic live-text patching.
+
+ZZI4 additionally uses the staged-daemon hotfix required by the beta firmware. The important invariants are:
+
+- the verified `ksud` is pre-staged before KernelSU changes the execution security state;
+- late-load serializes callers through an abstract AF_UNIX lock rather than a pre-KernelSU filesystem lock;
+- the loader switches into PID1's mount namespace before owning systemless/module mounts;
+- `/data/adb/ksud` is installed by the late-load path, not by post-root automation;
+- a boot-scoped global-readiness marker is published only after blocking mount stages complete;
+- duplicate late-load callers in the same kernel boot do not replay module stages.
+
+Post-root code must not restage `.ksud-stage`, replace `/data/adb/ksud` or call `late-load` again. Tests enforce those boundaries.
+
+## Native KernelSU soft reboot
+
+`Soft reboot after root` is deliberately post-root. Once KernelSU has been verified, Root My Galaxy launches one detached boot-scoped keeper through an already-working root bridge.
+
+The keeper does **not** restart zygote directly and does **not** gate the restart on Meta-Overlayfsx or ViPER mounts. Those mounts are part of the userspace lifecycle the restart itself must recreate.
+
+Instead, the keeper consumes the already-installed KernelSU userspace binary and requests:
+
+```text
+/data/adb/ksud soft-reboot
+```
+
+KernelSU then owns the native userspace transition: reset `sys.boot_completed`, `stop`, run post-fs-data/metamodule/mount lifecycle, `start`, run services, wait for framework boot completion, then run boot-completed stages.
+
+This preserves the firmware-sensitive late-load/daemon handoff and avoids the previous failure where the keeper waited for an OverlayFSx mount before initiating the very restart that would create it.
+
+Keeper log: `/data/local/tmp/rmg-postroot-keeper.log`.
+
+Accepted-request marker: `/data/local/tmp/.rmg-soft-reboot-accepted`.
+
+The marker is keyed to kernel `boot_id`; a userspace reboot keeps the same kernel boot and therefore cannot accidentally trigger Auto Root or a second soft reboot for that same boot.
+
+## Shizuku after root and after soft reboot
+
+Shizuku is Binder-first and root-first after KernelSU exists.
+
+Immediately after successful root, the post-root flow prefers an existing Shizuku Binder, then an authenticated root bridge, and only uses local Wireless ADB as compatibility fallback.
+
+After a KernelSU soft reboot, framework `BOOT_COMPLETED` may be emitted again while the kernel and KernelSU remain active. The Shizuku boot coordinator now recognizes that case before waiting for Wi-Fi:
+
+1. probe the existing Binder;
+2. if KernelSU is already active, try the RMG root-helper bridge;
+3. if needed, try an already-authorized direct KernelSU `su` bridge;
+4. launch Shizuku's native starter through root;
+5. only if no non-interactive root bridge works, continue to the existing Wi-Fi/mDNS/Wireless-ADB fallback.
+
+A soft reboot therefore does not need to repeat the long Wireless ADB bootstrap when root permission is already available.
 
 ## Auto Root
 
-Auto Root is intentionally different from ordinary manual execution in only the ways needed for boot reliability:
+Auto Root runs at most once per full kernel boot and is intentionally conservative around the exploit boundary:
 
 ```text
 BOOT_COMPLETED
       ↓
-foreground gate service
+boot_id duplicate gate
       ↓
-wait only for the dedicated Auto Root total-uptime floor
+foreground uptime gate
       ↓
-bind fresh :autoroot_exec process
+fresh :autoroot_exec process
       ↓
-Offline + Standalone exploit
+last-known-good Offline + Standalone payload
       ↓
-KernelSU verification
+KernelSU auto-late-load / serialized fallback
       ↓
-History result checkpoint
+global readiness verification
       ↓
-post-root automation / detached keeper
+History success checkpoint
+      ↓
+optional post-root automation
 ```
 
-It never chooses Shizuku automatically for root acquisition, never downloads a payload and runs at most once per full kernel boot. A soft/userspace reboot keeps the same `/proc/sys/kernel/random/boot_id`; duplicate `BOOT_COMPLETED` events for that same kernel boot are consumed and any stale Auto Root foreground service/notification is torn down instead of launching another exploit.
+A soft/userspace reboot does not change `/proc/sys/kernel/random/boot_id`, so duplicate framework boot events are consumed without launching another exploit.
 
-### Launch uptime
+## History and diagnostics
 
-The Manual and Auto Root launch policies are intentionally separated.
+History stores manual and automatic runs, target profile, terminal result and runtime logs. The exploit path avoids continuous persistence inside the sensitive race window; terminal state is written after the root path is complete.
 
-For exact CZG3, the manual **Diagnostic Launch Time** is only a historical UI name. It performs no diagnostics; it is a minimum total boot uptime measured with `SystemClock.elapsedRealtime()`. Available values remain `0 / 30 / 60 / 90 / 120 / 180 / 300 / 600` seconds, with the established Manual default of **120 s**.
+Individual logs can be exported as plain `.log`; completed runs can be exported in bulk as ZIP archives.
 
-Auto Root does **not** reuse that manual preference anymore. It has its own conservative default floor of **60 s total kernel uptime**. This is not a fixed 60-second sleep after `BOOT_COMPLETED`: only the remaining time to 60 s is waited. The choice deliberately keeps a modest post-boot stabilization margin for the still-racy FOPS stage while removing the former 120 s automatic wait. The new KernelSU bootstrap pre-stage/auto-late-load path is independent of this delay and does not require 120 s.
+For post-root soft-reboot diagnosis, inspect:
 
-## Wireless ADB and Shizuku without Tasker
-
-Root acquisition never depends on Wireless ADB, Shizuku or `WRITE_SECURE_SETTINGS`. They are post-root features only.
-
-The app now contains a local ADB client and a persistent ADB key. One-time setup uses Android Wireless Debugging pairing (TLS + SPAKE2). On Android 13+, the app first requests notification access from a visible activity because the six-digit pairing code is entered through the pairing foreground-service notification.
-
-After the first successful pairing/root bootstrap, the app uses KernelSU shell root to grant itself `WRITE_SECURE_SETTINGS`. Future boots can then:
-
-1. enable `adb_wifi_enabled` locally;
-2. discover the dynamic Wireless Debugging port through mDNS;
-3. authenticate to `127.0.0.1` with the saved key;
-4. verify `su -c id` through KernelSU `--allow-shell`;
-5. execute Shizuku's official `start.sh`;
-6. wait for the Shizuku Binder to become available.
-
-If `WRITE_SECURE_SETTINGS` is missing and Wireless Debugging is already enabled, the post-root flow can still connect and self-grant the permission for future boots. If Wireless Debugging is disabled, the app cannot turn it on locally without that permission, so Shizuku/module-refresh automation may be skipped for that run even though exploit + KernelSU root already succeeded. That condition must never be interpreted as a root-acquisition failure.
-
-If pairing is missing during Auto Root, root still succeeds; the post-root step records that pairing is required instead of turning the exploit result into failure.
-
-## Module pickup and zygote refresh after root
-
-The old bootstrap-socket soft-reboot handoff and the later app-side KernelSU lifecycle replay have both been removed from the active path.
-
-The app **does not** run this sequence anymore:
-
-```text
-ksud post-fs-data
-ksud services
-ksud boot-completed
-kill zygote
+```sh
+su -c 'cat /data/local/tmp/rmg-postroot-keeper.log'
 ```
 
-v0266 `late-load` remains the owner of KernelSU/module lifecycle initialization. After KernelSU has been verified and the successful root result has already been checkpointed, the app may launch one detached root-side keeper. From that point the Android app, Auto Root gate and `:autoroot_exec` process are no longer owners of module activation and never kill zygote themselves.
+## Building and releases
 
-The keeper performs only readiness/idempotence checks and one zygote respawn:
+The release workflow runs unit tests, Android lint and release assembly, verifies the bundled root helper against the commit-pinned payload feed, signs the APK and publishes the release artifacts.
 
-```text
-verified KernelSU late-load
-        ↓
-verify same kernel boot_id
-        ↓
-wait for sys.boot_completed
-        ↓
-wait for module/mount readiness
-        ↓
-verify zygote PID set is stable
-        ↓
-re-check boot_id + done marker
-        ↓
-kill old zygote/zygote64 once
-        ↓
-wait for a different zygote PID set
-        ↓
-verify same kernel boot_id + system_server
-        ↓
-write .cve43499-modules-done = <boot_id> <uptime>
-```
-
-A per-boot owner lock and done marker make the operation idempotent. If another keeper already owns the same `boot_id`, or the done marker already belongs to that boot, no second restart is attempted. If the kernel `boot_id` changes at any safety boundary, the keeper aborts without writing a success marker.
-
-### Meta-Overlayfsx-ViPER-safe
-
-This device uses **[igorcv88/Meta-Overlayfsx-ViPER-safe](https://github.com/igorcv88/Meta-Overlayfsx-ViPER-safe)**, not the stock Meta OverlayFS metamodule.
-
-The fork's `post-fs-data.sh` only resets its log. Its actual mount work lives in `metamount.sh`: the ext4 module image is mounted, ordinary modules are passed through OverlayFSx, and `ViPER4Android-RE-AIDL` is explicitly excluded from broad partition-root OverlayFS so its audio configuration/soundfx payload can be mounted granularly instead.
-
-Because of that architecture, replaying `post-fs-data` or manually re-running `metamount.sh` after KernelSU late-load is unnecessary and can create an invalid lifecycle ordering for other modules. The keeper instead observes the already-created state. When `meta-overlayfsx` is enabled it waits for:
-
-- `/data/adb/metamodule/mnt` to exist as an active mount;
-- the OverlayFSx kernel inspector to return `"status": "success"` when available;
-- if `ViPER4Android-RE-AIDL` is enabled, the fork's `Granular ViPER mounting completed without partition-root overlays` completion line;
-- absence of a stale broad `/vendor` or `/system` ViPER root overlay.
-
-If any of those checks fail, the keeper leaves the existing zygote alone rather than attempting to repair mounts by replaying KernelSU/module lifecycle stages.
-
-The keeper runtime log is `/data/local/tmp/rmg-postroot-keeper.log`; the boot-scoped completion marker is `/data/local/tmp/.cve43499-modules-done`.
-
-## v0266 payload/helper binding
-
-The v3 feed can declare a `rootHelper` artifact alongside `exploit` and `kernelsu`. The release workflow resolves the payload repository `main` to an immutable commit, verifies the helper size/SHA-256, embeds exactly that helper into the APK, and records provenance in the release build.
-
-Offline cache IDs include the exploit, KernelSU and helper digests. Legacy caches without helper metadata are fail-closed and must be refreshed by Manual Online.
-
-## History and logs
-
-History records manual and automatic runs, selected profile, result and captured runtime log. The critical exploit path does not continuously fsync History during the race; terminal state is persisted outside the sensitive race window.
-
-Open an individual run and use **Save** to export that run as a plain `.log`. On the History list, **Save** with no selection exports every completed run into one ZIP. Long-press runs to enter selection mode, then use **Save** to export only the selected logs into a ZIP. Running entries are excluded from bulk export so the archive contains stable snapshots.
-
-## Building
-
-The release workflow runs unit tests, Android lint and release assembly before signing/publishing the APK. The workflow also verifies that the helper embedded in the APK matches the current commit-pinned payload feed.
+Payload publication is maintained in the companion repository. Its workflow is target-aware, pins one source commit for all matrix builds, and aborts publication if `main` advances between plan/build/publish phases.
 
 ## Credits and provenance
 
 This fork combines work from several projects and contributors. Credit is explicit because substantial parts of the implementation are derived or adapted rather than newly invented here.
 
-- **[BuSung-dev/Root-My-Galaxy](https://github.com/BuSung-dev/Root-My-Galaxy)** — upstream application architecture, UI, installer flow, Shizuku integration, History and the original Root My Galaxy project.
-- **[BuSung-dev/Root-My-Galaxy-Payloads](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads)** — upstream payload/feed architecture and Samsung exploit integration used by the companion payload repository.
-- **[HyperRamzey/Root-My-Galaxy](https://github.com/HyperRamzey/Root-My-Galaxy)** and **[HyperRamzey/Root-My-Galaxy-Payloads](https://github.com/HyperRamzey/Root-My-Galaxy-Payloads)** — source for the persistent local Wireless ADB key/pairing stack, mDNS discovery, local ADB client, post-root Shizuku automation, and especially the single-owner/keeper + boot-scoped marker approach used as the model for the guarded zygote refresh in this fork.
-- **[igorcv88/Meta-Overlayfsx-ViPER-safe](https://github.com/igorcv88/Meta-Overlayfsx-ViPER-safe)**, based on **[RipperHybrid/meta-overlayfsx](https://github.com/RipperHybrid/meta-overlayfsx)** — OverlayFSx metamodule and the ViPER-safe granular mount architecture whose actual readiness signals are observed by the post-root keeper instead of replaying its lifecycle.
-- **[mitschud](https://github.com/mitschud)** / **[BuSung payload PR #300](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads/pull/300)** — hardware-tested Tracefs KASLR route and the root-helper auto-late-load design (`--allow-shell`, DEFEX-safe bind execution, daemon-stay and late-load markers) adapted to CZG3 v0266.
-- **[NebuSec/CyberMeowfia](https://github.com/NebuSec/CyberMeowfia/tree/main/IonStack/CVE-2026-43499/exploit)** — published CVE-2026-43499 exploit source on which the payload lineage is based.
-- **[KernelSU](https://github.com/tiann/KernelSU)** by tiann and contributors — kernel root framework, manager and `ksud` lifecycle used after bootstrap root.
-- **[Shizuku](https://github.com/RikkaApps/Shizuku)** by RikkaApps and contributors — Shizuku API/provider and official `start.sh` integration.
-- **Android Open Source Project / BoringSSL** — protocol reference for ADB authentication, Wireless Debugging TLS pairing and the SPAKE2/pairing-auth behavior mirrored by the local pairing implementation.
-- **[Bouncy Castle](https://www.bouncycastle.org/)** — cryptographic provider used by the local ADB key/certificate and pairing implementation.
+- **[BuSung-dev/Root-My-Galaxy](https://github.com/BuSung-dev/Root-My-Galaxy)** — upstream application architecture, UI and original project.
+- **[BuSung-dev/Root-My-Galaxy-Payloads](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads)** — upstream payload/feed architecture and Samsung exploit integration.
+- **[mitschud](https://github.com/mitschud)** / **[BuSung payload PR #300](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads/pull/300)** — Galaxy S25 6.6.127 Tracefs route, root-helper auto-late-load design and later writer-timing reference used by the ZZI4 port.
+- **[NebuSec/CyberMeowfia](https://github.com/NebuSec/CyberMeowfia/tree/main/IonStack/CVE-2026-43499/exploit)** — published CVE-2026-43499 exploit lineage.
+- **[KernelSU](https://github.com/tiann/KernelSU)** — kernel root framework and native `ksud` lifecycle/soft reboot.
+- **[HyperRamzey/Root-My-Galaxy](https://github.com/HyperRamzey/Root-My-Galaxy)** — reference for persistent local ADB/Shizuku post-root automation and single-owner/boot-scoped coordination.
+- **[igorcv88/Meta-Overlayfsx-ViPER-safe](https://github.com/igorcv88/Meta-Overlayfsx-ViPER-safe)**, based on **[RipperHybrid/meta-overlayfsx](https://github.com/RipperHybrid/meta-overlayfsx)** — OverlayFSx metamodule and ViPER-safe granular mount architecture.
+- **[Shizuku](https://github.com/RikkaApps/Shizuku)** and the user's **thedjchi/Shizuku** fork — Shizuku API/provider and root/ADB starter behavior.
+- **Android Open Source Project / BoringSSL / Bouncy Castle** — Wireless ADB authentication/pairing implementation references and cryptographic provider.
 
-Each upstream project remains subject to its own license and copyright notices. This repository is distributed under the license in [LICENSE](LICENSE).
+Each upstream project remains subject to its own license and copyright notices. This repository is distributed under [LICENSE](LICENSE).

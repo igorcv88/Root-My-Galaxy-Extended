@@ -16,6 +16,7 @@ import android.os.IBinder
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
@@ -32,12 +33,14 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
- * Optional pre-root Shizuku boot coordinator.
+ * Optional Shizuku boot coordinator.
  *
- * Unlike the old fixed 45-second mDNS loop, this service sleeps on an Android
- * Wi-Fi NetworkCallback. It performs no ADB work until a Wi-Fi transport is
- * actually connected. An already-running Binder always wins, and a coexistence
- * grace period lets Shizuku's own Start-on-boot worker or Tasker win first.
+ * A soft/userspace reboot preserves KernelSU because the kernel boot does not
+ * change. Therefore, after the initial Binder probe, this service first tries a
+ * root-backed Shizuku starter without waiting for Wi-Fi or touching Wireless
+ * Debugging. On a normal full boot where ephemeral KernelSU is not active yet,
+ * that probe fails closed and the existing event-driven Wi-Fi/ADB path remains
+ * unchanged.
  *
  * Auto Root remains independent. If Wi-Fi only appears near the configured
  * exploit gate, RMG yields through a small critical window rather than starting
@@ -76,9 +79,8 @@ class ShizukuBootService : Service() {
             } catch (error: Throwable) {
                 Log.w(TAG, "Early Shizuku bootstrap failed", error)
             } finally {
-                // Fail closed: any Wireless ADB session owned by this service is
-                // forced off even if cancellation lands between normal cleanup steps.
-                TemporaryWirelessAdb.forceDisable(this@ShizukuBootService)
+                // TemporaryWirelessAdb.use owns cleanup for the ADB branch.
+                // Root-only starts never touch adb_wifi_enabled at all.
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -90,7 +92,9 @@ class ShizukuBootService : Service() {
 
     override fun onDestroy() {
         bootstrapJob?.cancel()
-        TemporaryWirelessAdb.forceDisable(this)
+        // Cancellation inside TemporaryWirelessAdb.use executes its own finally;
+        // abrupt process death is covered by TemporaryWirelessAdb's failsafe alarm.
+        // Do not disable Wireless ADB here when this service only used root.
         scope.cancel()
         super.onDestroy()
     }
@@ -100,6 +104,13 @@ class ShizukuBootService : Service() {
             Log.i(TAG, "Shizuku Binder already available at boot; no starter selected")
             return
         }
+
+        // Soft reboot keeps KernelSU alive. Prefer that already-authorized root
+        // immediately and avoid the entire Wireless ADB/mDNS path when possible.
+        // A cold boot normally has no active ephemeral KernelSU yet, so this is a
+        // quick no-op before the legacy boot bootstrap continues unchanged.
+        val rootOutcome = tryExistingKernelSuRootStarterOnce()
+        if (rootOutcome?.started == true) return
 
         // If the fork's own BOOT_COMPLETED receiver is enabled, give its unique
         // WorkManager job a longer head start. With Tasker/other starters we still
@@ -118,6 +129,12 @@ class ShizukuBootService : Service() {
 
         while (currentCoroutineContext().isActive && isConfigured(this)) {
             if (ShizukuController.isRunning()) return
+
+            // KernelSU can become available while the service is alive (for
+            // example Auto Root finished after this service started). Re-check
+            // before sleeping on Wi-Fi so an available root path always wins.
+            val laterRootOutcome = tryExistingKernelSuRootStarterOnce()
+            if (laterRootOutcome?.started == true) return
 
             when (awaitWifiOrBinder()) {
                 WakeReason.Binder -> return
@@ -156,6 +173,98 @@ class ShizukuBootService : Service() {
             // socket is kept alive between attempts and Wireless ADB is already off.
             if (ShizukuController.awaitRunning(RETRY_IDLE_MILLIS)) return
         }
+    }
+
+    /**
+     * Try to start Shizuku from root that already exists for this kernel boot.
+     * The helper bridge is preferred. Direct `su` is probed with a short timeout
+     * and is used for the starter only after that probe already returns uid=0.
+     * If neither bridge is usable, return immediately and leave the existing ADB
+     * fallback untouched.
+     */
+    private suspend fun tryExistingKernelSuRootStarterOnce(): ShizukuStarter.Outcome? {
+        if (!NativeProbe.isKernelSuActive()) return null
+
+        val helperProbe = RootHelperShell.shell(this, "id")
+        if (helperProbe.exitCode == 0 && helperProbe.output.contains("uid=0")) {
+            Log.i(TAG, "KernelSU already active after userspace boot; starting Shizuku through RMG root helper")
+            return ShizukuStarter.start(
+                context = this,
+                shell = { command -> RootHelperShell.shell(this, command) },
+                binderTimeoutMillis = BINDER_START_TIMEOUT_MILLIS,
+                onLog = { message -> Log.i(TAG, message) },
+            )
+        }
+
+        val directProbe = directSuShell("id", DIRECT_SU_PROBE_TIMEOUT_MILLIS)
+        if (directProbe.exitCode == 0 && directProbe.output.contains("uid=0")) {
+            Log.i(TAG, "KernelSU app root already authorized after userspace boot; starting Shizuku directly with su")
+            return ShizukuStarter.start(
+                context = this,
+                shell = { command -> directSuShell(command, DIRECT_SU_COMMAND_TIMEOUT_MILLIS) },
+                binderTimeoutMillis = BINDER_START_TIMEOUT_MILLIS,
+                onLog = { message -> Log.i(TAG, message) },
+            )
+        }
+
+        Log.i(TAG, "KernelSU is active but no usable app root bridge is available; keeping existing ADB fallback")
+        return null
+    }
+
+    /** Execute an already-available KernelSU su path with a caller-selected bound. */
+    private fun directSuShell(
+        command: String,
+        timeoutMillis: Long,
+    ): LocalAdbClient.ShellResult {
+        val process = runCatching {
+            ProcessBuilder("su", "-c", command)
+                .redirectErrorStream(true)
+                .start()
+        }.getOrElse { error ->
+            return LocalAdbClient.ShellResult(
+                LocalAdbClient.UNKNOWN_SHELL_EXIT_CODE,
+                error.message ?: error.javaClass.simpleName,
+            )
+        }
+
+        val output = StringBuilder()
+        val reader = Thread({
+            runCatching {
+                process.inputStream.bufferedReader().use { stream ->
+                    val buffer = CharArray(4096)
+                    while (true) {
+                        val count = stream.read(buffer)
+                        if (count <= 0) break
+                        output.append(buffer, 0, count)
+                    }
+                }
+            }
+        }, "rmg-shizuku-root-reader").apply {
+            isDaemon = true
+            start()
+        }
+
+        val finished = runCatching {
+            process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)
+        }.getOrDefault(false)
+        if (!finished) {
+            process.destroy()
+            runCatching { process.waitFor(250, TimeUnit.MILLISECONDS) }
+            if (process.isAlive) process.destroyForcibly()
+        }
+        runCatching { reader.join(500) }
+
+        val code = if (finished) {
+            runCatching { process.exitValue() }
+                .getOrDefault(LocalAdbClient.UNKNOWN_SHELL_EXIT_CODE)
+        } else {
+            LocalAdbClient.UNKNOWN_SHELL_EXIT_CODE
+        }
+        val body = output.toString().trim()
+        return LocalAdbClient.ShellResult(
+            code,
+            if (!finished && body.isBlank()) "KernelSU su command timed out" else body,
+        )
     }
 
     private suspend fun tryShellStartersOnce(): ShizukuStarter.Outcome? {
@@ -243,7 +352,6 @@ class ShizukuBootService : Service() {
     }
 
     private suspend fun awaitBinder() {
-        // Keep this wait event-driven without inventing a long polling timeout.
         while (currentCoroutineContext().isActive) {
             if (ShizukuController.awaitRunning(BINDER_EVENT_WAIT_CHUNK_MILLIS)) return
         }
@@ -317,6 +425,8 @@ class ShizukuBootService : Service() {
         private const val BINDER_EVENT_WAIT_CHUNK_MILLIS = 60_000L
         private const val AUTO_ROOT_GUARD_BEFORE_MILLIS = 10_000L
         private const val AUTO_ROOT_GUARD_AFTER_MILLIS = 45_000L
+        private const val DIRECT_SU_PROBE_TIMEOUT_MILLIS = 2_000L
+        private const val DIRECT_SU_COMMAND_TIMEOUT_MILLIS = 15_000L
 
         fun startIfConfigured(context: Context) {
             if (!isConfigured(context)) return
@@ -329,7 +439,8 @@ class ShizukuBootService : Service() {
 
         private fun isConfigured(context: Context): Boolean {
             if (!AppPreferences.startShizukuOnBoot(context)) return false
-            return AppPreferences.adbPaired(context) ||
+            return NativeProbe.isKernelSuActive() ||
+                AppPreferences.adbPaired(context) ||
                 AppPreferences.shizukuAutomationToken(context).isNotBlank()
         }
     }
