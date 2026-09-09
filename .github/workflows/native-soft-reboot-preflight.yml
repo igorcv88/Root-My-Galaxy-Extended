@@ -29,12 +29,19 @@ jobs:
             :app:testDebugUnitTest \
             :app:lintDebug \
             :app:assembleRelease
-      - name: Soft-reboot invariants
+      - name: Post-root invariants
         run: |
           set -euo pipefail
           keeper=app/src/main/java/dev/busung/s25uroot/PostRootModuleKeeper.kt
-          grep -F '"${'$'}KSUD" soft-reboot' "$keeper"
+          shizuku=app/src/main/java/dev/busung/s25uroot/ShizukuBootService.kt
+
+          grep -F 'KSUD" soft-reboot' "$keeper"
           ! grep -F 'ctl.restart zygote' "$keeper"
           ! grep -F 'Meta-Overlayfsx ext4 image never became mounted' "$keeper"
-          ! grep -F '"${'$'}KSUD" late-load' "$keeper"
-          git diff --check HEAD^
+          ! grep -F 'KSUD" late-load' "$keeper"
+          ! grep -F '.ksud-stage' "$keeper"
+
+          grep -F 'tryExistingKernelSuRootStarterOnce()' "$shizuku"
+          grep -F 'DIRECT_SU_PROBE_TIMEOUT_MILLIS' "$shizuku"
+          grep -F 'DIRECT_SU_COMMAND_TIMEOUT_MILLIS' "$shizuku"
+          ! grep -F 'TemporaryWirelessAdb.forceDisable(this@ShizukuBootService)' "$shizuku"
