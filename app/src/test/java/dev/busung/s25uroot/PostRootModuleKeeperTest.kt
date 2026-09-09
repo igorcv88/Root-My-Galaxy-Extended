@@ -54,19 +54,31 @@ class PostRootModuleKeeperTest {
     }
 
     @Test
+    fun keeperUsesOnlyInstalledKernelSuDaemon() {
+        val script = PostRootModuleKeeper.buildKeeperScript(
+            "11111111-2222-3333-4444-555555555555",
+        )
+
+        assertTrue(script.contains("KSUD='/data/adb/ksud'"))
+        assertFalse(script.contains("/data/local/tmp/ksud-s25u-kdp"))
+        assertFalse(script.contains("/data/adb/ksu/bin/ksud"))
+        assertTrue(script.contains("installed KernelSU daemon missing or not executable"))
+    }
+
+    @Test
     fun acceptanceHandshakeIsPublishedOnlyAfterKsudReturnsSuccess() {
         val script = PostRootModuleKeeper.buildKeeperScript(
             "11111111-2222-3333-4444-555555555555",
         )
 
         val bootCompletedWait = script.indexOf("sys.boot_completed never became ready")
-        val ksudSelection = script.indexOf("KSUD=''")
+        val ksudSelection = script.indexOf("KSUD='/data/adb/ksud'")
         val softRebootCommand = script.indexOf("\"\$KSUD\" soft-reboot")
         val rcGuard = script.indexOf("KernelSU native soft reboot request failed")
         val acceptedMarkerWrite = script.indexOf("publish_request_accepted || exit 79")
 
         assertTrue(bootCompletedWait >= 0)
-        assertTrue(ksudSelection > bootCompletedWait)
+        assertTrue(ksudSelection >= 0)
         assertTrue(softRebootCommand > ksudSelection)
         assertTrue(rcGuard > softRebootCommand)
         assertTrue(acceptedMarkerWrite > rcGuard)
