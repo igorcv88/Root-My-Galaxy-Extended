@@ -19,7 +19,7 @@ class PostRootModuleKeeperTest {
     }
 
     @Test
-    fun keeperNeverReplaysKernelSuLifecycle() {
+    fun keeperDelegatesUserspaceRestartToKernelSu() {
         val script = PostRootModuleKeeper.buildKeeperScript(
             "11111111-2222-3333-4444-555555555555",
         )
@@ -29,11 +29,28 @@ class PostRootModuleKeeperTest {
             .filter { it.isNotBlank() && !it.startsWith("#") }
             .joinToString("\n")
 
-        val replay = Regex("""(^|[;&|]\s*)ksud\s+(post-fs-data|services|boot-completed)(\s|$)""")
-        assertFalse(replay.containsMatchIn(executable))
+        assertTrue(executable.contains("\"\$KSUD\" soft-reboot"))
+        assertFalse(executable.contains("ctl.restart zygote"))
         assertFalse(executable.contains("kill -9"))
-        assertTrue(executable.contains("/system/bin/setprop ctl.restart zygote"))
-        assertTrue(script.contains(PostRootModuleKeeper.DONE_MARKER))
+        assertFalse(executable.contains("pidof zygote"))
+    }
+
+    @Test
+    fun keeperNeverReplaysOrRestagesKernelSuLateLoad() {
+        val script = PostRootModuleKeeper.buildKeeperScript(
+            "11111111-2222-3333-4444-555555555555",
+        )
+
+        val executable = script.lineSequence()
+            .map(String::trim)
+            .filter { it.isNotBlank() && !it.startsWith("#") }
+            .joinToString("\n")
+
+        val replay = Regex("""(^|[;&|]\s*)[^\n]*ksud\s+(late-load|post-fs-data|services|boot-completed)(\s|$)""")
+        assertFalse(replay.containsMatchIn(executable))
+        assertFalse(executable.contains(".ksud-stage"))
+        assertFalse(executable.contains("mv -f /data/adb/ksud"))
+        assertFalse(executable.contains("stage_daemon"))
     }
 
     @Test
@@ -50,18 +67,14 @@ class PostRootModuleKeeperTest {
     }
 
     @Test
-    fun keeperGuardsMetaOverlayfsxViperSafeBeforeZygote() {
+    fun moduleMountReadinessDoesNotBlockNativeSoftReboot() {
         val script = PostRootModuleKeeper.buildKeeperScript(
             "11111111-2222-3333-4444-555555555555",
         )
 
-        assertTrue(script.contains("OVERLAY_META='/data/adb/modules/meta-overlayfsx'"))
-        assertTrue(script.contains("OVERLAY_HOME='/data/adb/metamodule'"))
-        assertTrue(script.contains("OVERLAY_DATA='/data/adb/overlayfsx-data'"))
-        assertTrue(script.contains("${'$'}OVERLAY_DATA/mnt"))
-        assertTrue(script.contains("${'$'}OVERLAY_HOME/mnt"))
-        assertTrue(script.contains("OverlayFSx kernel inspector did not report success"))
-        assertTrue(script.contains("Granular ViPER mounting completed without partition-root overlays"))
-        assertTrue(script.contains("unsafe broad ViPER root overlay detected"))
+        assertFalse(script.contains("OVERLAY_META="))
+        assertFalse(script.contains("Meta-Overlayfsx ext4 image never became mounted"))
+        assertFalse(script.contains("Granular ViPER mounting completed without partition-root overlays"))
+        assertTrue(script.contains("Do not gate this on mounts"))
     }
 }
