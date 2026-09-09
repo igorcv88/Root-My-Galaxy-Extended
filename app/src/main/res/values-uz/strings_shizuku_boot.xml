@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shizuku_boot_section">Shizuku ishga tushishi</string>
+    <string name="shizuku_boot_title">Qurilma yuklanganda Shizuku’ni ishga tushirish</string>
+    <string name="shizuku_boot_description">RMG istalgan Wi‑Fi ulanishini kutadi va Auto Root’ni kechiktirmasdan Shizuku’ni ishga tushiradi. Shizuku yoki Tasker kabi boshqa yuklanish ishga tushiruvchilari zaxira sifatida ishlatilishi mumkin, ammo bitta asosiy ishga tushiruvchi takroriy poygalarni oldini oladi.</string>
+    <string name="shizuku_boot_waiting">Wi‑Fi yoki mavjud Shizuku Binder kutilmoqda</string>
+    <string name="shizuku_boot_auth_token">Avtomatlashtirish autentifikatsiya tokeni</string>
+    <string name="shizuku_boot_auth_token_description">Ixtiyoriy Intent zaxira usuli. Tokenni Shizuku → Control Shizuku with automation apps bo‘limidan nusxalang.</string>
+</resources>
