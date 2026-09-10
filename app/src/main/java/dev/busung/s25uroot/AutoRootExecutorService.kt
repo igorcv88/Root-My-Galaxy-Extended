@@ -172,46 +172,66 @@ class AutoRootExecutorService : Service() {
             AutoRootSupport.markVerifiedForBoot(this, bootToken)
             appendHistory("[+] Auto Root completed")
 
-            // Save success before post-root userspace work. If zygote restart
-            // kills this process, History still contains the verified root result.
+            // Persist verified root before any userspace restart. The automatic
+            // recovery action is deliberately only a Zygote/system_server restart;
+            // KernelSU's full userspace soft reboot remains an explicit Advanced tool.
             finishHistory(InstallRunResult.Succeeded)
 
-            val softReboot = AppPreferences.softRebootAfterRoot(this)
+            val restartZygote = AppPreferences.restartZygoteAfterRoot(this)
             val startShizuku = AppPreferences.autoStartShizukuAfterRoot(this)
-            if (softReboot || startShizuku) {
-                if (softReboot) updateNotification(getString(R.string.soft_reboot_starting))
+            if (restartZygote || startShizuku) {
+                if (restartZygote) updateNotification(getString(R.string.zygote_restart_starting))
 
-                val postRoot = try {
-                    PostRootAutomation.run(
-                        context = this,
-                        softReboot = softReboot,
-                        startShizuku = startShizuku,
-                        onLog = { appendHistory(it) },
-                    )
-                } catch (error: Throwable) {
-                    val detail = error.message ?: error.javaClass.simpleName
-                    appendHistory("[!] Post-root automation failed: $detail")
-                    Log.w(TAG, "Post-root automation failed after verified root", error)
-                    null
+                if (startShizuku) {
+                    val postRoot = try {
+                        PostRootAutomation.run(
+                            context = this,
+                            softReboot = false,
+                            startShizuku = true,
+                            onLog = { appendHistory(it) },
+                        )
+                    } catch (error: Throwable) {
+                        val detail = error.message ?: error.javaClass.simpleName
+                        appendHistory("[!] Post-root Shizuku automation failed: $detail")
+                        Log.w(TAG, "Post-root Shizuku automation failed after verified root", error)
+                        null
+                    }
+                    if (postRoot != null && !postRoot.shizukuStarted && postRoot.detail.isNotBlank()) {
+                        appendHistory("[!] Post-root Shizuku automation: ${postRoot.detail.take(200)}")
+                    }
                 }
 
-                finishHistory(InstallRunResult.Succeeded)
+                if (restartZygote) {
+                    val restart = try {
+                        RootRecoveryActions.restartZygote(this)
+                    } catch (error: Throwable) {
+                        RootRecoveryResult(
+                            accepted = false,
+                            detail = error.message ?: error.javaClass.simpleName,
+                        )
+                    }
+                    if (restart.accepted) {
+                        appendHistory("[+] ${restart.detail}")
+                        finishHistory(InstallRunResult.Succeeded)
+                        Log.i(TAG, "Post-root Zygote restart scheduled")
+                        // The detached recovery script waits briefly before ctl.restart,
+                        // giving this executor time to close the foreground gate cleanly.
+                        stopGateAndSelf(removeNotification = true)
+                        return
+                    }
 
-                if (postRoot?.softRebootStarted == true) {
-                    Log.i(TAG, "KernelSU userspace restart started")
-                    stopGateAndSelf(removeNotification = true)
-                    return
-                }
-
-                if (softReboot && postRoot != null && !postRoot.softRebootStarted) {
                     val failureMessage = getString(
-                        R.string.soft_reboot_failed,
-                        postRoot.detail.take(160),
+                        R.string.zygote_restart_failed,
+                        restart.detail.take(160),
                     )
+                    appendHistory("[!] $failureMessage")
+                    finishHistory(InstallRunResult.Succeeded)
                     Log.w(TAG, failureMessage)
                     finishWithResult(failureMessage)
                     return
                 }
+
+                finishHistory(InstallRunResult.Succeeded)
             }
 
             finishWithResult(getString(R.string.autoroot_root_restored))
