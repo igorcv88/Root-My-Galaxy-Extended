@@ -35,7 +35,10 @@ object AppPreferences {
     private const val ADVANCED_MODE = "advanced_mode"
     private const val SHIZUKU_MODE = "shizuku_mode"
     private const val AUTO_ROOT_ENABLED = "auto_root_enabled"
-    private const val SOFT_REBOOT_AFTER_ROOT = "soft_reboot_after_root"
+    // Keep the legacy storage key so existing users who enabled the old automatic
+    // KernelSU soft reboot retain the opt-in when its behavior becomes the lighter
+    // post-root Zygote restart.
+    private const val RESTART_ZYGOTE_AFTER_ROOT = "soft_reboot_after_root"
     private const val AUTO_START_SHIZUKU_AFTER_ROOT = "auto_start_shizuku_after_root"
     private const val START_SHIZUKU_ON_BOOT = "start_shizuku_on_boot"
     private const val SHIZUKU_AUTOMATION_TOKEN = "shizuku_automation_token"
@@ -81,11 +84,19 @@ object AppPreferences {
         prefs(context).edit().putBoolean(AUTO_ROOT_ENABLED, enabled).apply()
     }
 
-    fun softRebootAfterRoot(context: Context): Boolean =
-        prefs(context).getBoolean(SOFT_REBOOT_AFTER_ROOT, false)
+    /**
+     * Used only before a destructive reboot. `commit()` is deliberate: a reboot
+     * must not race the asynchronous SharedPreferences disk write and come back
+     * with Auto Root still enabled.
+     */
+    internal fun setAutoRootEnabledImmediately(context: Context, enabled: Boolean): Boolean =
+        prefs(context).edit().putBoolean(AUTO_ROOT_ENABLED, enabled).commit()
 
-    fun setSoftRebootAfterRoot(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(SOFT_REBOOT_AFTER_ROOT, enabled).apply()
+    fun restartZygoteAfterRoot(context: Context): Boolean =
+        prefs(context).getBoolean(RESTART_ZYGOTE_AFTER_ROOT, false)
+
+    fun setRestartZygoteAfterRoot(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(RESTART_ZYGOTE_AFTER_ROOT, enabled).apply()
     }
 
     fun autoStartShizukuAfterRoot(context: Context): Boolean =

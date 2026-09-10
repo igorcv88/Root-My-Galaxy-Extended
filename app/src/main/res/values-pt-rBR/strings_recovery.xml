@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="restart_zygote_after_root_title">Reiniciar Zygote após o root</string>
+    <string name="restart_zygote_after_root_description">Depois que o KernelSU for verificado, recria o Zygote e o system_server para que Zygisk e LSPosed entrem sem executar um soft reboot completo do KernelSU.</string>
+    <string name="zygote_restart_starting">Reiniciando o Zygote após o root</string>
+    <string name="zygote_restart_failed">O root funcionou, mas o reinício do Zygote não iniciou: %1$s</string>
+
+    <string name="recovery_tools_title">Ferramentas de recuperação do root</string>
+    <string name="recovery_tools_description">Use somente depois que o KernelSU estiver ativo. Comece pela ação mais leve que corresponda ao problema.</string>
+    <string name="recovery_restart_zygote_title">Reiniciar Zygote</string>
+    <string name="recovery_restart_zygote_description">Recria o Zygote e o system_server sem reiniciar o kernel. Use quando Zygisk, LSPosed ou hooks de aplicativos não entrarem após o root.</string>
+    <string name="recovery_reload_modules_title">Recarregar módulos do KernelSU</string>
+    <string name="recovery_reload_modules_description">Executa novamente os estágios de módulos do late-load usando o ksud instalado. Use quando scripts, propriedades do sistema ou mounts de metamódulos não forem aplicados.</string>
+    <string name="recovery_soft_reboot_title">Soft reboot do KernelSU</string>
+    <string name="recovery_soft_reboot_description">Executa o reinício nativo do userspace e o ciclo de módulos do KernelSU. Use quando vários módulos ou mounts precisarem de uma recarga limpa do userspace.</string>
+    <string name="recovery_reboot_unroot_title">Reiniciar e remover root</string>
+    <string name="recovery_reboot_unroot_description">Faz um reboot completo e remove a sessão temporária do KernelSU. O Auto Root é desativado antes para o aparelho permanecer sem root.</string>
+    <string name="recovery_hold_hint">Segure uma ação por 1,4 segundo para executá-la.</string>
+    <string name="recovery_root_required">O KernelSU precisa estar ativo para executar estas ações.</string>
+    <string name="recovery_unroot_warning">Reiniciar e remover root desativa o Auto Root antes do reboot. Ative o Auto Root novamente depois se quiser restaurar o root automaticamente.</string>
+    <string name="recovery_action_accepted">%1$s</string>
+    <string name="recovery_action_failed">Falha na ação de recuperação: %1$s</string>
+</resources>

@@ -170,7 +170,7 @@ class MainActivity : ComponentActivity() {
     private var advancedMode by mutableStateOf(false)
     private var shizukuMode by mutableStateOf(false)
     private var autoRootEnabled by mutableStateOf(false)
-    private var softRebootAfterRoot by mutableStateOf(false)
+    private var restartZygoteAfterRoot by mutableStateOf(false)
     private var czg3BootMinUptimeSeconds by mutableStateOf(DiagnosticUptime.DEFAULT_SECONDS)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -182,7 +182,7 @@ class MainActivity : ComponentActivity() {
         advancedMode = AppPreferences.advancedMode(this)
         shizukuMode = AppPreferences.shizukuMode(this)
         autoRootEnabled = AppPreferences.autoRootEnabled(this)
-        softRebootAfterRoot = AppPreferences.softRebootAfterRoot(this)
+        restartZygoteAfterRoot = AppPreferences.restartZygoteAfterRoot(this)
         czg3BootMinUptimeSeconds = AppPreferences.czg3BootMinUptimeSeconds(this)
         setContent {
             RootMyGalaxyTheme(accentColor = accentColor, themeMode = themeMode) {
@@ -193,7 +193,7 @@ class MainActivity : ComponentActivity() {
                     advancedMode = advancedMode,
                     shizukuMode = shizukuMode,
                     autoRootEnabled = autoRootEnabled,
-                    softRebootAfterRoot = softRebootAfterRoot,
+                    restartZygoteAfterRoot = restartZygoteAfterRoot,
                     czg3BootMinUptimeSeconds = czg3BootMinUptimeSeconds,
                     onAccentColorChanged = { color ->
                         AppPreferences.setAccentColor(this, color)
@@ -215,9 +215,9 @@ class MainActivity : ComponentActivity() {
                         AppPreferences.setAutoRootEnabled(this, enabled)
                         autoRootEnabled = enabled
                     },
-                    onSoftRebootAfterRootChanged = { enabled ->
-                        AppPreferences.setSoftRebootAfterRoot(this, enabled)
-                        softRebootAfterRoot = enabled
+                    onRestartZygoteAfterRootChanged = { enabled ->
+                        AppPreferences.setRestartZygoteAfterRoot(this, enabled)
+                        restartZygoteAfterRoot = enabled
                     },
                     onCzg3BootMinUptimeChanged = { seconds ->
                         AppPreferences.setCzg3BootMinUptimeSeconds(this, seconds)
@@ -305,14 +305,14 @@ private fun RootApp(
     advancedMode: Boolean,
     shizukuMode: Boolean,
     autoRootEnabled: Boolean,
-    softRebootAfterRoot: Boolean,
+    restartZygoteAfterRoot: Boolean,
     czg3BootMinUptimeSeconds: Int,
     onAccentColorChanged: (AccentColor) -> Unit,
     onThemeModeChanged: (AppThemeMode) -> Unit,
     onAdvancedModeChanged: (Boolean) -> Unit,
     onShizukuModeChanged: (Boolean) -> Unit,
     onAutoRootEnabledChanged: (Boolean) -> Unit,
-    onSoftRebootAfterRootChanged: (Boolean) -> Unit,
+    onRestartZygoteAfterRootChanged: (Boolean) -> Unit,
     onCzg3BootMinUptimeChanged: (Int) -> Unit,
     openInstaller: (String?) -> Unit,
 ) {
@@ -530,12 +530,13 @@ private fun RootApp(
                 AppPage.Settings -> SettingsPage(
                     padding = padding,
                     device = device,
+                    installState = installState,
                     accentColor = accentColor,
                     themeMode = themeMode,
                     advancedMode = advancedMode,
                     shizukuMode = shizukuMode,
                     autoRootEnabled = autoRootEnabled,
-                    softRebootAfterRoot = softRebootAfterRoot,
+                    restartZygoteAfterRoot = restartZygoteAfterRoot,
                     czg3BootMinUptimeSeconds = czg3BootMinUptimeSeconds,
                     updateStatus = updateStatus,
                     onCheckForUpdate = checkForUpdate,
@@ -545,7 +546,7 @@ private fun RootApp(
                     onAdvancedModeChanged = onAdvancedModeChanged,
                     onShizukuModeChanged = onShizukuModeChanged,
                     onAutoRootEnabledChanged = onAutoRootEnabledChanged,
-                    onSoftRebootAfterRootChanged = onSoftRebootAfterRootChanged,
+                    onRestartZygoteAfterRootChanged = onRestartZygoteAfterRootChanged,
                     onCzg3BootMinUptimeChanged = onCzg3BootMinUptimeChanged,
                 )
             }
@@ -1501,12 +1502,13 @@ private fun saveRunLog(context: Context, uri: Uri, entry: InstallHistoryEntry) {
 private fun SettingsPage(
     padding: PaddingValues,
     device: DeviceSnapshot,
+    installState: InstallUiState,
     accentColor: AccentColor,
     themeMode: AppThemeMode,
     advancedMode: Boolean,
     shizukuMode: Boolean,
     autoRootEnabled: Boolean,
-    softRebootAfterRoot: Boolean,
+    restartZygoteAfterRoot: Boolean,
     czg3BootMinUptimeSeconds: Int,
     updateStatus: UpdateStatus,
     onCheckForUpdate: () -> Unit,
@@ -1516,7 +1518,7 @@ private fun SettingsPage(
     onAdvancedModeChanged: (Boolean) -> Unit,
     onShizukuModeChanged: (Boolean) -> Unit,
     onAutoRootEnabledChanged: (Boolean) -> Unit,
-    onSoftRebootAfterRootChanged: (Boolean) -> Unit,
+    onRestartZygoteAfterRootChanged: (Boolean) -> Unit,
     onCzg3BootMinUptimeChanged: (Int) -> Unit,
 ) {
     val context = LocalContext.current
@@ -1778,13 +1780,13 @@ private fun SettingsPage(
                 )
                 SettingsSwitchCard(
                     icon = Icons.Rounded.SystemUpdate,
-                    title = stringResource(R.string.soft_reboot_title),
-                    description = stringResource(R.string.soft_reboot_description),
-                    checked = softRebootAfterRoot,
+                    title = stringResource(R.string.restart_zygote_after_root_title),
+                    description = stringResource(R.string.restart_zygote_after_root_description),
+                    checked = restartZygoteAfterRoot,
                     position = SettingsCardPosition.Bottom,
                     onCheckedChange = {
                         clickHaptic(view)
-                        onSoftRebootAfterRootChanged(it)
+                        onRestartZygoteAfterRootChanged(it)
                     },
                 )
             }
@@ -1801,6 +1803,15 @@ private fun SettingsPage(
                     onAdvancedModeChanged(it)
                 },
             )
+        }
+        if (advancedMode) {
+            item {
+                AdvancedRecoverySettings(
+                    rootActive = installState.phase == InstallPhase.Installed,
+                    autoRootEnabled = autoRootEnabled,
+                    onAutoRootEnabledChanged = onAutoRootEnabledChanged,
+                )
+            }
         }
         item { SectionLabel(stringResource(R.string.about)) }
         item {
