@@ -14,8 +14,11 @@ internal data class RootRecoveryResult(
 /**
  * Explicit post-root repair actions for the Advanced settings page.
  *
- * These actions never acquire bootstrap root, never stage/replace ksud and never
- * replay the exploit. They consume only the already-verified KernelSU session.
+ * These actions never acquire bootstrap root and never replay the exploit. The
+ * module reload uses only the already-installed /data/adb/ksud; because the RMG
+ * ksud intentionally blocks duplicate late-load calls per boot, it stages an
+ * identical verified copy into RMG's existing .ksud-stage handoff and clears the
+ * boot-scoped readiness marker immediately before the explicit replay.
  */
 internal object RootRecoveryActions {
     const val HOLD_TO_CONFIRM_MILLIS = 1_400L
@@ -82,6 +85,8 @@ internal object RootRecoveryActions {
             HOOK=${shellQuote(hookPath)}
             LOCK=${shellQuote(lockPath)}
             KSUD='/data/adb/ksud'
+            STAGE='/data/local/tmp/.ksud-stage'
+            READY='/data/local/tmp/.rmg-ksu-late-load-ready'
 
             current_boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
             publish() {
@@ -89,7 +94,7 @@ internal object RootRecoveryActions {
                 chmod 0666 "${'$'}RESULT" 2>/dev/null || true
             }
             cleanup() {
-                rm -f -- "${'$'}HOOK" "${'$'}MARKER" "${'$'}0" 2>/dev/null
+                rm -f -- "${'$'}HOOK" "${'$'}MARKER" "${'$'}STAGE" "${'$'}0" 2>/dev/null
                 if [ "${'$'}(cat "${'$'}LOCK/token" 2>/dev/null)" = "${'$'}TOKEN" ]; then
                     rm -rf -- "${'$'}LOCK" 2>/dev/null
                 fi
@@ -99,6 +104,10 @@ internal object RootRecoveryActions {
             [ "${'$'}(id -u 2>/dev/null)" = "0" ] || { publish 'error:not-root'; exit 0; }
             [ "${'$'}(current_boot)" = "${'$'}EXPECTED_BOOT" ] || { publish 'error:boot-changed'; exit 0; }
             [ -x "${'$'}KSUD" ] || { publish 'error:installed-ksud-missing'; exit 0; }
+            grep -Fqx "boot_id=${'$'}EXPECTED_BOOT" "${'$'}READY" 2>/dev/null || {
+                publish 'error:global-readiness-missing'
+                exit 0
+            }
 
             if ! mkdir "${'$'}LOCK" 2>/dev/null; then
                 LOCK_BOOT="${'$'}(cat "${'$'}LOCK/boot_id" 2>/dev/null)"
@@ -112,6 +121,21 @@ internal object RootRecoveryActions {
             printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}LOCK/boot_id"
             printf '%s\n' "${'$'}TOKEN" > "${'$'}LOCK/token"
 
+            # RMG's patched ksud consumes .ksud-stage before the post-load
+            # namespace switch. Use a byte-identical copy of the installed daemon
+            # so this explicit recovery operation never introduces another build.
+            rm -f -- "${'$'}STAGE"
+            /system/bin/cp "${'$'}KSUD" "${'$'}STAGE" || { publish 'error:ksud-stage-copy-failed'; exit 0; }
+            chmod 0755 "${'$'}STAGE" || { publish 'error:ksud-stage-chmod-failed'; exit 0; }
+            INSTALLED_HASH="${'$'}(sha256sum "${'$'}KSUD" 2>/dev/null)"
+            INSTALLED_HASH="${'$'}{INSTALLED_HASH%% *}"
+            STAGE_HASH="${'$'}(sha256sum "${'$'}STAGE" 2>/dev/null)"
+            STAGE_HASH="${'$'}{STAGE_HASH%% *}"
+            [ -n "${'$'}INSTALLED_HASH" ] && [ "${'$'}INSTALLED_HASH" = "${'$'}STAGE_HASH" ] || {
+                publish 'error:ksud-stage-hash-mismatch'
+                exit 0
+            }
+
             mkdir -p /data/adb/boot-completed.d
             cat > "${'$'}HOOK" <<RMG_RELOAD_HOOK
             #!/system/bin/sh
@@ -121,9 +145,12 @@ internal object RootRecoveryActions {
             RMG_RELOAD_HOOK
             chmod 0755 "${'$'}HOOK"
 
-            # KernelSU 3.3.x skips loading the LKM when it is already present,
-            # then reapplies the late-load/module lifecycle. The boot-completed
-            # hook is our proof that the detached lifecycle reached its end.
+            # The normal RMG path treats READY as a same-boot replay guard. The
+            # user explicitly requested a reload, so clear it only after all
+            # checks, staging and the completion hook are ready. The patched ksud
+            # republishes READY only after its blocking mount stages finish in
+            # PID1's namespace.
+            rm -f -- "${'$'}READY" || { publish 'error:readiness-clear-failed'; exit 0; }
             "${'$'}KSUD" late-load --allow-shell --package-name me.weishu.kernelsu
             RC="${'$'}?"
             if [ "${'$'}RC" != "0" ]; then
@@ -133,7 +160,8 @@ internal object RootRecoveryActions {
 
             i=0
             while [ "${'$'}i" -lt 120 ]; do
-                if [ "${'$'}(cat "${'$'}MARKER" 2>/dev/null)" = "${'$'}TOKEN" ]; then
+                if [ "${'$'}(cat "${'$'}MARKER" 2>/dev/null)" = "${'$'}TOKEN" ] && \
+                   grep -Fqx "boot_id=${'$'}EXPECTED_BOOT" "${'$'}READY" 2>/dev/null; then
                     publish 'ok'
                     exit 0
                 fi
@@ -141,7 +169,7 @@ internal object RootRecoveryActions {
                 i="${'$'}((i + 1))"
                 sleep 1
             done
-            publish 'error:boot-completed-hook-timeout'
+            publish 'error:boot-completed-or-readiness-timeout'
             exit 0
         """.trimIndent() + "\n"
 
@@ -163,9 +191,16 @@ internal object RootRecoveryActions {
             when {
                 status == "ok" -> {
                     RootHelperShell.shell(context, "rm -f -- ${shellQuote(resultPath)}")
+                    val global = KernelSuGlobalReadiness.probe(context, bootId)
+                    if (global.exitCode != 0) {
+                        return@withContext RootRecoveryResult(
+                            accepted = false,
+                            detail = global.output.ifBlank { "KernelSU global readiness verification failed" }.takeLast(240),
+                        )
+                    }
                     return@withContext RootRecoveryResult(
                         accepted = true,
-                        detail = "KernelSU module lifecycle reapplied through boot-completed",
+                        detail = "KernelSU module lifecycle reapplied and PID1 mount readiness verified",
                     )
                 }
                 status.startsWith("error:") -> {
@@ -181,7 +216,7 @@ internal object RootRecoveryActions {
 
         RootRecoveryResult(
             accepted = false,
-            detail = "Timed out waiting for the KernelSU boot-completed reload marker",
+            detail = "Timed out waiting for the KernelSU module reload result",
         )
     }
 
