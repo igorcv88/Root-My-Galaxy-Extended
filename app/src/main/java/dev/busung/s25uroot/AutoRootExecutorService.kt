@@ -1,5 +1,6 @@
 package dev.busung.s25uroot
 
+import android.app.Application
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -24,16 +25,17 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Fresh process used only for the critical Auto Root execution window.
+ * Auto Root execution service.
  *
- * The foreground gate binds this service at the configured launch uptime with
- * BIND_IMPORTANT | BIND_ABOVE_CLIENT. Auto Root is always offline. Legacy
- * targets remain standalone; targets whose route policy requires shell wait for
- * the boot Shizuku transport before consuming their once-per-boot exploit attempt.
- * onBind() has no execution side effect: the gate must first connect and then send
- * an explicit start command over Messenger.
+ * The normal component is hosted in the fresh :autoroot_exec process for
+ * standalone targets. Shell-required targets bind AutoRootShellExecutorService,
+ * which inherits this implementation but stays in the default/provider process
+ * so it uses the same Shizuku Binder instance as ShizukuProvider.
+ *
+ * onBind() has no execution side effect: the gate must first connect and then
+ * send an explicit start command over Messenger.
  */
-class AutoRootExecutorService : Service() {
+open class AutoRootExecutorService : Service() {
     private val dispatcher: ExecutorCoroutineDispatcher =
         Executors.newSingleThreadExecutor { task ->
             Thread(task, "RootMyGalaxy-AutoRootExec")
@@ -54,7 +56,10 @@ class AutoRootExecutorService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? {
         if (intent?.action != ACTION_RUN_AUTO_ROOT) return null
-        Log.i(TAG, "Fresh Auto Root executor bound; awaiting explicit start command")
+        Log.i(
+            TAG,
+            "Auto Root executor bound in ${Application.getProcessName()}; awaiting explicit start command",
+        )
         return commandMessenger.binder
     }
 
@@ -122,6 +127,7 @@ class AutoRootExecutorService : Service() {
                 return
             }
 
+            val processName = Application.getProcessName()
             historyEntry = InstallHistoryEntry(
                 id = UUID.randomUUID().toString(),
                 startedAtMillis = System.currentTimeMillis(),
@@ -129,7 +135,7 @@ class AutoRootExecutorService : Service() {
                 result = InstallRunResult.Running,
                 profileId = null,
                 usedShizuku = false,
-                log = "[*] Auto Root started: fresh executor, offline cache",
+                log = "[*] Auto Root started: executor=$processName, offline cache",
             )
 
             val payloads = AutoRootSupport.loadVerifiedLocalPayloads(this)
@@ -147,16 +153,19 @@ class AutoRootExecutorService : Service() {
             )
 
             if (shellTransportRequired) {
+                require(processName == packageName) {
+                    "Shell-required Auto Root was dispatched outside the Shizuku provider process ($processName)"
+                }
                 updateNotification(getString(R.string.autoroot_preparing_exploit))
-                appendHistory("[*] Waiting for Shizuku shell transport required by target policy")
+                appendHistory("[*] Waiting for Shizuku shell transport in provider process")
                 ShizukuBootService.startForAutoRoot(this)
                 require(ShizukuController.awaitRunning(AUTO_ROOT_SHIZUKU_WAIT_MILLIS)) {
-                    "Shizuku did not become available for the shell-required Auto Root route"
+                    "Shizuku Binder is not available in the provider process"
                 }
                 require(ShizukuController.isGranted()) {
                     "Root My Galaxy is not authorized to use Shizuku for the shell-required Auto Root route"
                 }
-                appendHistory("[+] Shizuku shell transport is ready")
+                appendHistory("[+] Shizuku shell transport is ready in provider process")
             }
 
             require(AutoRootSupport.claimAttempt(this, bootToken)) {
