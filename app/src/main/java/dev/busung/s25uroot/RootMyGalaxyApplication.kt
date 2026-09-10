@@ -5,13 +5,26 @@ import android.content.Context
 import rikka.shizuku.ShizukuProvider
 
 class RootMyGalaxyApplication : Application() {
+    private var isShizukuProviderProcess = false
+
     override fun attachBaseContext(base: Context) {
-        // ShizukuProvider is hosted in the default app process. Secondary Auto Root
-        // processes ask that provider process for its Binder through the API's built-in
-        // multi-process bridge.
-        ShizukuProvider.enableMultiProcessSupport(
-            Application.getProcessName() == base.packageName,
-        )
         super.attachBaseContext(base)
+
+        // The provider itself lives in the default app process. Auto Root uses
+        // dedicated :autoroot_gate / :autoroot_exec processes, so every process
+        // enables the API's built-in Binder sharing before components initialize.
+        isShizukuProviderProcess = Application.getProcessName() == base.packageName
+        ShizukuProvider.enableMultiProcessSupport(isShizukuProviderProcess)
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+
+        if (!isShizukuProviderProcess) {
+            // A secondary process can be created after Shizuku already delivered its
+            // Binder to the provider process. Explicitly request that existing Binder
+            // instead of waiting for a future broadcast that may never come.
+            ShizukuProvider.requestBinderForNonProviderProcess(this)
+        }
     }
 }
