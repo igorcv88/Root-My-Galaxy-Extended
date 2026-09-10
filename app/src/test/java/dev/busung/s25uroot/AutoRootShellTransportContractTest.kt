@@ -114,8 +114,37 @@ class AutoRootShellTransportContractTest {
         assertTrue(runner.contains("runLocalAdbHelper(session, *arguments)"))
         assertTrue(runner.contains("KernelSU handoff client=standalone-app"))
         assertTrue(runner.contains("""ksuExec(arrayOf("--late-load"))"""))
-        assertTrue(runner.contains("KernelSuGlobalReadiness.command(bootToken)"))
+        assertTrue(runner.contains("postRootExec(KernelSuGlobalReadiness.command(bootToken))"))
+        assertTrue(runner.contains("runShizukuKernelSuRoot(command)"))
+        assertTrue(runner.contains("runLocalAdbKernelSuRoot(session, command)"))
+        assertFalse(runner.contains("""ksuExec(arrayOf("-c", KernelSuGlobalReadiness.command(bootToken)))"""))
         assertFalse(runner.contains("KernelSuGlobalReadiness.probe(context, bootToken)"))
+    }
+
+    @Test
+    fun kernelSuRuntimeDetectionDoesNotDependOnProcModulesOrReceipt() {
+        val runtime = source("KernelSuRuntime.kt")
+        assertTrue(runtime.contains("""RootHelperShell.execute(context, "--ksu-info")"""))
+
+        val viewModel = source("InstallViewModel.kt")
+        assertTrue(viewModel.contains("KernelSuRuntime.isControlActive(app)"))
+        assertTrue(viewModel.contains("AutoRootSupport.markVerifiedForBoot(app, bootToken)"))
+
+        val gate = source("AutoRootService.kt")
+        assertTrue(gate.contains("KernelSuRuntime.isControlActive(this)"))
+
+        val executor = source("AutoRootExecutorService.kt")
+        assertTrue(executor.contains("KernelSuRuntime.isControlActive(this)"))
+        assertTrue(executor.contains("post-root verification incomplete"))
+    }
+
+    @Test
+    fun bootstrapHelperFallsBackOnlyForTransportFailure() {
+        val helper = source("RootHelperShell.kt")
+        assertTrue(helper.contains("bootstrapTransportUnavailable(bootstrap)"))
+        assertTrue(helper.contains("KernelSuRuntime.shizukuRootShell(command) ?: bootstrap"))
+        assertTrue(helper.contains("su: connect daemon:"))
+        assertTrue(helper.contains("su: permission denied"))
     }
 
     @Test

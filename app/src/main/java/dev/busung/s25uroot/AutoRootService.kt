@@ -182,7 +182,7 @@ class AutoRootService : Service() {
                 Log.i(TAG, "Auto Root target requires shell transport; prioritizing Shizuku bootstrap")
             }
 
-            if (NativeProbe.isKernelSuActive()) {
+            if (KernelSuRuntime.isControlActive(this)) {
                 AutoRootSupport.markVerifiedForBoot(this, initialBootToken)
                 Log.i(TAG, "Auto Root skipped: KernelSU already active for this kernel boot")
                 stopWithoutResult()
@@ -207,7 +207,7 @@ class AutoRootService : Service() {
                 ?: error(getString(R.string.error_boot_id))
             require(bootToken == initialBootToken) { getString(R.string.autoroot_boot_changed) }
 
-            if (NativeProbe.isKernelSuActive()) {
+            if (KernelSuRuntime.isControlActive(this)) {
                 AutoRootSupport.markVerifiedForBoot(this, bootToken)
                 Log.i(TAG, "Auto Root skipped after stabilization: KernelSU already active")
                 stopWithoutResult()

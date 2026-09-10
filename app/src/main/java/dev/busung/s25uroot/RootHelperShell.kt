@@ -11,8 +11,16 @@ import java.util.concurrent.TimeUnit
  * another privileged transport.
  */
 internal object RootHelperShell {
-    fun shell(context: Context, command: String): LocalAdbClient.ShellResult =
-        execute(context, "-c", command)
+    fun shell(context: Context, command: String): LocalAdbClient.ShellResult {
+        val bootstrap = execute(context, "-c", command)
+        if (!bootstrapTransportUnavailable(bootstrap)) return bootstrap
+
+        // After kernelsu.ko loads, Samsung/SELinux can deny reconnecting to the
+        // temporary bootstrap socket. Never replay a command merely because it
+        // returned non-zero: switch transports only for an unmistakable helper
+        // transport/authentication failure.
+        return KernelSuRuntime.shizukuRootShell(command) ?: bootstrap
+    }
 
     fun execute(context: Context, vararg arguments: String): LocalAdbClient.ShellResult {
         val helper = helperFile(context)
@@ -74,6 +82,12 @@ internal object RootHelperShell {
             code,
             if (!finished && body.isBlank()) "Root helper command timed out" else body,
         )
+    }
+
+    private fun bootstrapTransportUnavailable(result: LocalAdbClient.ShellResult): Boolean {
+        val output = result.output.lowercase()
+        return "su: connect daemon:" in output ||
+            "su: permission denied" in output
     }
 
     private fun helperFile(context: Context): File =

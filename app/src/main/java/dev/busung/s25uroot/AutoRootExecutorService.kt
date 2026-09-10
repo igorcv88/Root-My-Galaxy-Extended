@@ -124,7 +124,7 @@ open class AutoRootExecutorService : Service() {
                 getString(R.string.autoroot_boot_changed)
             }
 
-            if (NativeProbe.isKernelSuActive()) {
+            if (KernelSuRuntime.isControlActive(this)) {
                 AutoRootSupport.markVerifiedForBoot(this, bootToken)
                 finishWithResult(getString(R.string.autoroot_root_restored))
                 return
@@ -311,6 +311,27 @@ open class AutoRootExecutorService : Service() {
         } catch (error: Throwable) {
             if (!scope.isActive) return
             val detail = error.message ?: error.javaClass.simpleName
+
+            // Root acquisition and full userspace/module readiness are separate
+            // boundaries. If kernelsu.ko is already controllable, persist the
+            // current boot as rooted even when a later readiness/automation step
+            // failed. This prevents the UI and the next BOOT_COMPLETED from
+            // treating a live KernelSU instance as unrooted and replaying exploit.
+            val controlActive = runCatching { KernelSuRuntime.isControlActive(this) }
+                .getOrDefault(false)
+            if (controlActive) {
+                AutoRootSupport.currentBootToken()?.let { bootToken ->
+                    runCatching { AutoRootSupport.markVerifiedForBoot(this, bootToken) }
+                }
+                if (historyEntry != null) {
+                    appendHistory("[!] KernelSU control is active; post-root verification incomplete: $detail")
+                    finishHistory(InstallRunResult.Succeeded)
+                }
+                Log.w(TAG, "KernelSU control active after Auto Root post-root failure: $detail", error)
+                finishWithResult("KernelSU root is active; post-root verification incomplete: ${detail.takeLast(180)}")
+                return
+            }
+
             Log.e(TAG, "Auto Root executor failed", error)
             if (historyEntry != null) {
                 appendHistory("[-] $detail")

@@ -78,8 +78,8 @@ internal class AutoRootRunner(
         )
 
         onStage(AutoRootStage.LoadingKernelSu)
-        withKernelSuClient(shellTransport) { ksuExec ->
-            val autoLoaded = waitForAutoLateLoad(bootToken, ksuExec)
+        withKernelSuClient(shellTransport) { ksuExec, postRootExec ->
+            val autoLoaded = waitForAutoLateLoad(bootToken, ksuExec, postRootExec)
 
             if (autoLoaded) {
                 // Keep the same authenticated client principal that acquired root.
@@ -88,7 +88,7 @@ internal class AutoRootRunner(
                 // here makes a healthy auto-late-load look unavailable.
                 onLog("[+] KernelSU auto-late-load globally verified; skipped duplicate late-load")
                 onStage(AutoRootStage.VerifyingRoot)
-                verifyKernelSu(bootToken, ksuExec)
+                verifyKernelSu(bootToken, ksuExec, postRootExec)
             } else {
                 onLog("[!] KernelSU auto-late-load not globally ready; using same-transport client fallback")
                 logKernelSuAutoStage(ksuExec)
@@ -100,7 +100,7 @@ internal class AutoRootRunner(
                 if (lateLoad.output.isNotBlank()) onLog(lateLoad.output)
 
                 onStage(AutoRootStage.VerifyingRoot)
-                verifyKernelSu(bootToken, ksuExec)
+                verifyKernelSu(bootToken, ksuExec, postRootExec)
             }
         }
     }
@@ -108,6 +108,7 @@ internal class AutoRootRunner(
     private suspend fun verifyKernelSu(
         bootToken: String,
         ksuExec: suspend (Array<out String>) -> AutoRootCommandResult,
+        postRootExec: suspend (String) -> AutoRootCommandResult,
     ) {
         val verification = runCatching { ksuExec(arrayOf("--ksu-info")) }.getOrNull()
         val nativeActive = NativeProbe.isKernelSuActive()
@@ -122,7 +123,11 @@ internal class AutoRootRunner(
             onLog(verification.output)
         }
 
-        val global = ksuExec(arrayOf("-c", KernelSuGlobalReadiness.command(bootToken)))
+        // Do not reconnect to the bootstrap temp_su.sock after KernelSU is
+        // active. On ZZI4 SELinux can reject that socket while KernelSU itself
+        // is already healthy. Verify global userspace readiness through the
+        // post-load KernelSU root bridge instead.
+        val global = postRootExec(KernelSuGlobalReadiness.command(bootToken))
         require(global.code == 0) {
             context.getString(
                 R.string.error_ksu_verify,
@@ -137,6 +142,7 @@ internal class AutoRootRunner(
     private suspend fun waitForAutoLateLoad(
         bootToken: String,
         ksuExec: suspend (Array<out String>) -> AutoRootCommandResult,
+        postRootExec: suspend (String) -> AutoRootCommandResult,
     ): Boolean {
         val deadline = SystemClock.elapsedRealtime() + AUTO_LATE_LOAD_WAIT_MILLIS
         var lastOutput = ""
@@ -145,7 +151,7 @@ internal class AutoRootRunner(
             val controlActive = probe?.code == 0 || NativeProbe.isKernelSuActive()
             if (controlActive) {
                 val global = runCatching {
-                    ksuExec(arrayOf("-c", KernelSuGlobalReadiness.command(bootToken)))
+                    postRootExec(KernelSuGlobalReadiness.command(bootToken))
                 }.getOrNull()
                 if (global != null) {
                     lastOutput = global.output
@@ -166,7 +172,7 @@ internal class AutoRootRunner(
 
         if (!NativeProbe.isKernelSuActive()) return false
         val finalGlobal = runCatching {
-            ksuExec(arrayOf("-c", KernelSuGlobalReadiness.command(bootToken)))
+            postRootExec(KernelSuGlobalReadiness.command(bootToken))
         }.getOrNull()
         return finalGlobal?.code == 0
     }
@@ -454,14 +460,20 @@ internal class AutoRootRunner(
 
     private suspend fun <T> withKernelSuClient(
         shellTransport: AutoRootShellTransport?,
-        block: suspend (suspend (Array<out String>) -> AutoRootCommandResult) -> T,
+        block: suspend (
+            bootstrapExec: suspend (Array<out String>) -> AutoRootCommandResult,
+            postRootExec: suspend (String) -> AutoRootCommandResult,
+        ) -> T,
     ): T = when (shellTransport) {
         AutoRootShellTransport.Shizuku -> {
             require(ShizukuController.isGranted()) {
                 "Shizuku shell transport disappeared before KernelSU handoff"
             }
             onLog("[*] KernelSU handoff client=shizuku-shell uid=2000")
-            block { arguments -> runShizukuHelper(*arguments) }
+            block(
+                { arguments -> runShizukuHelper(*arguments) },
+                { command -> runShizukuKernelSuRoot(command) },
+            )
         }
         AutoRootShellTransport.LocalAdb -> {
             TemporaryWirelessAdb.use(
@@ -482,13 +494,22 @@ internal class AutoRootRunner(
                         "KernelSU handoff local ADB lost u:r:shell:s0: " + identity.output.takeLast(240)
                     }
                     onLog("[*] KernelSU handoff client=local-adb-shell uid=2000")
-                    block { arguments -> runLocalAdbHelper(session, *arguments) }
+                    block(
+                        { arguments -> runLocalAdbHelper(session, *arguments) },
+                        { command -> runLocalAdbKernelSuRoot(session, command) },
+                    )
                 }
             }
         }
         null -> {
             onLog("[*] KernelSU handoff client=standalone-app")
-            block { arguments -> runHelper(*arguments) }
+            block(
+                { arguments -> runHelper(*arguments) },
+                { command ->
+                    val result = RootHelperShell.shell(context, command)
+                    AutoRootCommandResult(result.exitCode, stripAnsi(result.output.trim()))
+                },
+            )
         }
     }
 
@@ -547,6 +568,19 @@ internal class AutoRootRunner(
             dir = "/data/local/tmp",
         )
         return awaitHelperProcess(process)
+    }
+
+    private fun runShizukuKernelSuRoot(command: String): AutoRootCommandResult {
+        val result = ShizukuController.shell("su -c ${shellQuote(command)}")
+        return AutoRootCommandResult(result.exitCode, stripAnsi(result.output.trim()))
+    }
+
+    private fun runLocalAdbKernelSuRoot(
+        session: WirelessAdbSession,
+        command: String,
+    ): AutoRootCommandResult {
+        val result = session.shell("su -c ${shellQuote(command)} 2>&1")
+        return AutoRootCommandResult(result.exitCode, stripAnsi(result.output.trim()))
     }
 
     private fun runLocalAdbHelper(

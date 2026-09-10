@@ -486,8 +486,14 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun detectInstalled(): Boolean {
-        if (NativeProbe.isKernelSuActive()) return true
-        val bootToken = currentBootToken() ?: return false
+        val bootToken = currentBootToken()
+        if (KernelSuRuntime.isControlActive(app)) {
+            if (bootToken != null) {
+                runCatching { AutoRootSupport.markVerifiedForBoot(app, bootToken) }
+            }
+            return true
+        }
+        if (bootToken == null) return false
         val receipt = app.getSharedPreferences(INSTALL_RECEIPT, Application.MODE_PRIVATE)
         return receipt.getString(RECEIPT_BOOT_TOKEN, null) == bootToken &&
             receipt.getBoolean(RECEIPT_VERIFIED, false)
