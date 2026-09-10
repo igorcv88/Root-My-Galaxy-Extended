@@ -57,6 +57,7 @@ internal enum class RecoveryTool {
 @Composable
 internal fun AdvancedRecoverySettings(
     rootActive: Boolean,
+    autoRootEnabled: Boolean,
     onAutoRootEnabledChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
@@ -175,7 +176,7 @@ internal fun AdvancedRecoverySettings(
         Text(
             text = stringResource(R.string.recovery_unroot_warning),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
+            color = MaterialTheme.colorScheme.error.copy(alpha = if (autoRootEnabled) 1f else 0.82f),
             modifier = Modifier.padding(horizontal = 4.dp),
         )
     }
