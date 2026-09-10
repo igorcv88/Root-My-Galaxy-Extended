@@ -217,33 +217,44 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
 
                 // Persist a successful root result before any userspace restart.
                 // Keep the history entry active so post-root logs can still be
-                // appended if the process survives the zygote restart.
+                // appended until a scheduled Zygote restart kills this process.
                 checkpointHistorySuccess()
 
-                val softReboot = AppPreferences.softRebootAfterRoot(app)
+                val restartZygote = AppPreferences.restartZygoteAfterRoot(app)
                 val startShizuku = AppPreferences.autoStartShizukuAfterRoot(app)
-                if (softReboot || startShizuku) {
-                    if (softReboot) {
+                if (restartZygote || startShizuku) {
+                    if (restartZygote) {
                         mutableState.value = mutableState.value.copy(
-                            message = app.getString(R.string.soft_reboot_starting),
+                            message = app.getString(R.string.zygote_restart_starting),
                         )
                     }
                     try {
-                        val postRoot = PostRootAutomation.run(
-                            context = app,
-                            softReboot = softReboot,
-                            startShizuku = startShizuku,
-                            onLog = ::appendLog,
-                        )
-                        if (softReboot && !postRoot.softRebootStarted) {
-                            val message = app.getString(
-                                R.string.soft_reboot_failed,
-                                postRoot.detail.take(160),
+                        if (startShizuku) {
+                            val postRoot = PostRootAutomation.run(
+                                context = app,
+                                softReboot = false,
+                                startShizuku = true,
+                                onLog = ::appendLog,
                             )
-                            mutableState.value = mutableState.value.copy(message = message)
-                            appendLog("[!] $message")
-                        } else if (!softReboot && startShizuku && !postRoot.shizukuStarted && postRoot.detail.isNotBlank()) {
-                            appendLog("[!] Post-root Shizuku automation: ${postRoot.detail.take(200)}")
+                            if (!postRoot.shizukuStarted && postRoot.detail.isNotBlank()) {
+                                appendLog("[!] Post-root Shizuku automation: ${postRoot.detail.take(200)}")
+                            }
+                        }
+
+                        if (restartZygote) {
+                            val restart = RootRecoveryActions.restartZygote(app)
+                            if (!restart.accepted) {
+                                val message = app.getString(
+                                    R.string.zygote_restart_failed,
+                                    restart.detail.take(160),
+                                )
+                                mutableState.value = mutableState.value.copy(message = message)
+                                appendLog("[!] $message")
+                            } else {
+                                appendLog("[+] ${restart.detail}")
+                                finishHistory(InstallRunResult.Succeeded)
+                                return@launch
+                            }
                         }
                     } catch (error: Throwable) {
                         // Root is already verified. Post-root automation must never
