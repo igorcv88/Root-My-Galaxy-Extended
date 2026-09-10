@@ -29,8 +29,10 @@ import kotlinx.coroutines.launch
  *
  * The normal component is hosted in the fresh :autoroot_exec process for
  * standalone targets. Shell-required targets bind AutoRootShellExecutorService,
- * which inherits this implementation but stays in the default/provider process
- * so it uses the same Shizuku Binder instance as ShizukuProvider.
+ * which inherits this implementation but stays in the default/provider process.
+ * A live authorized Shizuku Binder is preferred there; if early-boot Binder
+ * delivery fails, the same executor falls back to RMG's paired local ADB client,
+ * which still launches the exploit from u:r:shell:s0.
  *
  * onBind() has no execution side effect: the gate must first connect and then
  * send an explicit start command over Messenger.
@@ -146,33 +148,56 @@ open class AutoRootExecutorService : Service() {
             val currentHistory = historyEntry ?: error("Auto Root history state missing")
             historyEntry = currentHistory.copy(
                 profileId = payloads.profile.profileId,
-                usedShizuku = shellTransportRequired,
                 log = currentHistory.log +
                     "\n[*] profile=${payloads.profile.profileId} transport=" +
                     if (shellTransportRequired) "shell-required" else "standalone",
             )
 
+            var selectedShellTransport: AutoRootShellTransport? = null
             if (shellTransportRequired) {
                 require(processName == packageName) {
-                    "Shell-required Auto Root was dispatched outside the Shizuku provider process ($processName)"
+                    "Shell-required Auto Root was dispatched outside the provider process ($processName)"
                 }
+
                 updateNotification(getString(R.string.autoroot_preparing_exploit))
-                appendHistory("[*] Waiting for Shizuku shell transport in provider process")
+                appendHistory("[*] Checking preferred Shizuku shell transport in provider process")
                 ShizukuBootService.startForAutoRoot(this)
-                require(ShizukuController.awaitRunning(AUTO_ROOT_SHIZUKU_WAIT_MILLIS)) {
-                    "Shizuku Binder is not available in the provider process"
+
+                val shizukuRunning =
+                    ShizukuController.awaitRunning(AUTO_ROOT_SHIZUKU_PREFERENCE_GRACE_MILLIS)
+                selectedShellTransport = if (shizukuRunning && ShizukuController.isGranted()) {
+                    appendHistory("[+] Shizuku shell transport is ready in provider process")
+                    AutoRootShellTransport.Shizuku
+                } else {
+                    require(AppPreferences.adbPaired(this)) {
+                        if (shizukuRunning) {
+                            "Shizuku is running but Root My Galaxy is not authorized, and no paired local ADB fallback is available"
+                        } else {
+                            "Shizuku Binder is unavailable and no paired local ADB fallback is available"
+                        }
+                    }
+                    appendHistory(
+                        if (shizukuRunning) {
+                            "[!] Shizuku Binder is present but unauthorized; selecting paired local ADB shell fallback"
+                        } else {
+                            "[!] Shizuku Binder was not delivered; selecting paired local ADB shell fallback"
+                        },
+                    )
+                    // The boot coordinator may itself be retrying local ADB solely
+                    // to obtain a Binder that this app is not receiving. Stop that
+                    // redundant owner before Auto Root opens its own serialized ADB
+                    // session. This does not stop the already-running Shizuku server.
+                    ShizukuBootService.stop(this)
+                    AutoRootShellTransport.LocalAdb
                 }
-                require(ShizukuController.isGranted()) {
-                    "Root My Galaxy is not authorized to use Shizuku for the shell-required Auto Root route"
-                }
-                appendHistory("[+] Shizuku shell transport is ready in provider process")
+
+                val selectedHistory = historyEntry ?: error("Auto Root history state missing")
+                historyEntry = selectedHistory.copy(
+                    usedShizuku = selectedShellTransport == AutoRootShellTransport.Shizuku,
+                )
             }
 
-            require(AutoRootSupport.claimAttempt(this, bootToken)) {
-                getString(R.string.autoroot_already_attempted)
-            }
-            appendHistory("[*] Once-per-boot exploit attempt claimed after transport readiness")
-
+            var attemptClaimed = false
             var lastRunnerSnapshot = ""
             val runner = AutoRootRunner(
                 context = this,
@@ -200,7 +225,21 @@ open class AutoRootExecutorService : Service() {
                     appendHistory(delta)
                 },
             )
-            runner.run(payloads, bootToken)
+            runner.run(
+                payloads = payloads,
+                bootToken = bootToken,
+                shellTransport = selectedShellTransport,
+                beforeExploit = {
+                    require(!attemptClaimed) {
+                        "Auto Root exploit claim callback was invoked twice"
+                    }
+                    require(AutoRootSupport.claimAttempt(this, bootToken)) {
+                        getString(R.string.autoroot_already_attempted)
+                    }
+                    attemptClaimed = true
+                    appendHistory("[*] Once-per-boot exploit attempt claimed after transport readiness")
+                },
+            )
 
             AutoRootSupport.markVerifiedForBoot(this, bootToken)
             appendHistory("[+] Auto Root completed")
@@ -355,13 +394,25 @@ open class AutoRootExecutorService : Service() {
             )
             .build()
 
+    private fun createNotificationChannel() {
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(
+                AUTO_ROOT_CHANNEL_ID,
+                getString(R.string.autoroot_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = getString(R.string.autoroot_channel_description)
+            },
+        )
+    }
+
     companion object {
         const val ACTION_RUN_AUTO_ROOT = "dev.busung.s25uroot.action.RUN_FRESH_AUTO_ROOT"
         const val EXTRA_BOOT_TOKEN = "boot_token"
         const val MSG_START_AUTO_ROOT = 1
 
         private const val TAG = "RootMyGalaxyAutoRootExec"
-        private const val AUTO_ROOT_SHIZUKU_WAIT_MILLIS = 90_000L
+        private const val AUTO_ROOT_SHIZUKU_PREFERENCE_GRACE_MILLIS = 5_000L
         private const val MAX_EXECUTOR_WAKELOCK_MILLIS = 20 * 60 * 1_000L
     }
 }
