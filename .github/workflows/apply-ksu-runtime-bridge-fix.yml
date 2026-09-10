@@ -2,6 +2,11 @@ name: Apply KernelSU runtime bridge fix
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/ksu-runtime-bridge-trigger
 
 permissions:
   contents: write
