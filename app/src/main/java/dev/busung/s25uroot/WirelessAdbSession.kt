@@ -74,11 +74,18 @@ class WirelessAdbSession private constructor(
      */
     fun runStreaming(
         command: String,
+        overallTimeoutMs: Long = 15 * 60 * 1_000L,
+        stallTimeoutMs: Long = 5 * 60 * 1_000L,
         shouldStop: () -> Boolean = { false },
         onOutput: (String) -> Unit,
     ): String {
         val accumulated = StringBuilder()
-        client.shellStreaming(command, shouldStop = shouldStop) { chunk ->
+        client.shellStreaming(
+            command = command,
+            overallTimeoutMs = overallTimeoutMs,
+            stallTimeoutMs = stallTimeoutMs,
+            shouldStop = shouldStop,
+        ) { chunk ->
             accumulated.append(chunk)
             onOutput(accumulated.toString())
         }
