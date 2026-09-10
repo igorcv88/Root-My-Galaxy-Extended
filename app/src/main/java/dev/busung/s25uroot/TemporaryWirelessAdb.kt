@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
  * A best-effort alarm is also armed before enabling it. If the app process dies
  * during the narrow ADB window, the receiver still gets a chance to force the
  * setting off later instead of leaving Wireless Debugging enabled indefinitely.
+ * The alarm covers the longest supported Auto Root stream (15 minutes).
  *
  * All in-process users are serialized. Shizuku boot bootstrap and shell-required
  * Auto Root both live in the provider process; without this lock one caller could
@@ -98,7 +99,7 @@ internal object TemporaryWirelessAdb {
 
     const val ACTION_FORCE_DISABLE = "dev.busung.s25uroot.action.FORCE_DISABLE_WIRELESS_ADB"
     private const val CLEANUP_REQUEST_CODE = 0x57414442
-    private const val FAILSAFE_DISABLE_DELAY_MILLIS = 5 * 60 * 1_000L
+    private const val FAILSAFE_DISABLE_DELAY_MILLIS = 20 * 60 * 1_000L
     private const val TAG = "RmgTemporaryWirelessAdb"
 }
 
