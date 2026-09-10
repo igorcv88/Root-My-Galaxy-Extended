@@ -1,6 +1,7 @@
 package dev.busung.s25uroot
 
 import android.app.Application
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
