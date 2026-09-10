@@ -43,6 +43,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import java.util.Locale
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -56,7 +57,6 @@ internal enum class RecoveryTool {
 @Composable
 internal fun AdvancedRecoverySettings(
     rootActive: Boolean,
-    autoRootEnabled: Boolean,
     onAutoRootEnabledChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
@@ -83,7 +83,7 @@ internal fun AdvancedRecoverySettings(
             }
             Toast.makeText(
                 context,
-                String.format(messageTemplate, result.detail),
+                String.format(Locale.getDefault(), messageTemplate, result.detail),
                 Toast.LENGTH_LONG,
             ).show()
             runningTool = null
