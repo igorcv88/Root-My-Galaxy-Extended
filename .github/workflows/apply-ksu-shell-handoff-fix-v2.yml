@@ -1,0 +1,91 @@
+name: Apply KernelSU shell handoff fix v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/ksu-shell-handoff-trigger-v2
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Apply corrected transport-aware handoff patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import textwrap
+
+          source = Path('.github/workflows/apply-ksu-shell-handoff-fix.yml').read_text()
+          start_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n"
+          body = source.split(start_marker, 1)[1].split(end_marker, 1)[0]
+          body = textwrap.dedent(body)
+          Path('/tmp/rmg-ksu-patch.py').write_text(body)
+          subprocess.run(['python3', '/tmp/rmg-ksu-patch.py'], check=True)
+
+          runner = Path('app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt')
+          text = runner.read_text()
+          needle = 'private suspend fun awaitHelperProcess(process: Process)'
+          if needle not in text:
+              raise SystemExit('awaitHelperProcess signature not found')
+          text = text.replace(
+              needle,
+              'private suspend fun awaitHelperProcess(process: java.lang.Process)',
+              1,
+          )
+          runner.write_text(text)
+
+          readiness = Path('app/src/main/java/dev/busung/s25uroot/KernelSuGlobalReadiness.kt')
+          text = readiness.read_text()
+          needle = '        return\n            "boot=$boot; " +'
+          if needle not in text:
+              raise SystemExit('readiness return sequence not found')
+          text = text.replace(needle, '        return "boot=$boot; " +', 1)
+          readiness.write_text(text)
+          PY
+
+      - name: Verify source invariants
+        run: |
+          set -euo pipefail
+          grep -Fq 'withKernelSuClient(shellTransport)' app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt
+          grep -Fq 'KernelSU handoff client=shizuku-shell uid=2000' app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt
+          grep -Fq 'KernelSU handoff client=local-adb-shell uid=2000' app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt
+          grep -Fq 'ksuExec(arrayOf("--late-load"))' app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt
+          grep -Fq 'awaitHelperProcess(process: java.lang.Process)' app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt
+          ! grep -Fq 'KernelSuGlobalReadiness.probe(context, bootToken)' app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt
+          git diff --check
+
+      - name: Test, lint and assemble release
+        run: |
+          chmod +x gradlew
+          ./gradlew --build-cache :app:testDebugUnitTest :app:lintDebug :app:assembleRelease
+
+      - name: Publish exact tested fix and clean one-shot files
+        run: |
+          set -euo pipefail
+          git config user.name "Igor"
+          git config user.email "igorv88@gmail.com"
+          rm -f \
+            .github/workflows/apply-ksu-shell-handoff-fix.yml \
+            .github/workflows/apply-ksu-shell-handoff-fix-v2.yml \
+            .github/ksu-shell-handoff-trigger \
+            .github/ksu-shell-handoff-trigger-v2
+          git add -A
+          git diff --cached --check
+          git commit -m "Keep KernelSU handoff on exploit shell identity"
+          git push origin HEAD:main
