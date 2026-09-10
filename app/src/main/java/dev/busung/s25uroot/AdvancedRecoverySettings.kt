@@ -46,7 +46,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-enum class RecoveryTool {
+internal enum class RecoveryTool {
     RestartZygote,
     ReloadModules,
     SoftReboot,
@@ -97,7 +97,7 @@ internal fun AdvancedRecoverySettings(
             text = stringResource(R.string.recovery_tools_description),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 4.dp, bottom = 4.dp),
+            modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 4.dp),
         )
 
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -171,7 +171,7 @@ internal fun AdvancedRecoverySettings(
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 4.dp, top = 2.dp),
+            modifier = Modifier.padding(start = 4.dp, top = 2.dp, end = 4.dp),
         )
         Text(
             text = stringResource(R.string.recovery_unroot_warning),
