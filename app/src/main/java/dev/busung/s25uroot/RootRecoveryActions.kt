@@ -31,21 +31,40 @@ internal object RootRecoveryActions {
         val token = actionToken()
         val scriptPath = "/data/local/tmp/rmg-restart-zygote-$token.sh"
         val logPath = "/data/local/tmp/rmg-restart-zygote.log"
+        val acceptedPath = "/data/local/tmp/.rmg-restart-zygote-accepted-$token"
+        val acceptedMarker = "RMG_ZYGOTE_RESTART_ACCEPTED"
         val script = """
             #!/system/bin/sh
             EXPECTED_BOOT=${shellQuote(bootId)}
+            ACCEPTED=${shellQuote(acceptedPath)}
+            ACCEPTED_VALUE=${shellQuote(acceptedMarker)}
             current_boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
+            publish_handoff() {
+                printf '%s\n' "${'$'}1" > "${'$'}ACCEPTED" || exit 79
+                chmod 0666 "${'$'}ACCEPTED" 2>/dev/null || true
+            }
+            reject_handoff() {
+                publish_handoff "error:${'$'}1"
+                rm -f -- "${'$'}0"
+                exit 0
+            }
 
-            [ "${'$'}(id -u 2>/dev/null)" = "0" ] || exit 62
-            [ "${'$'}(current_boot)" = "${'$'}EXPECTED_BOOT" ] || exit 60
-            [ "${'$'}(getprop init.svc.zygote 2>/dev/null)" = "running" ] || exit 65
+            [ "${'$'}(id -u 2>/dev/null)" = "0" ] || reject_handoff 'not-root'
+            [ "${'$'}(current_boot)" = "${'$'}EXPECTED_BOOT" ] || reject_handoff 'boot-changed'
+            [ "${'$'}(getprop init.svc.zygote 2>/dev/null)" = "running" ] || reject_handoff 'zygote-not-running'
 
-            # Give the caller enough time to persist UI/history state before the
-            # app process and system_server are recreated.
-            sleep 0.75
             if [ "${'$'}(getprop init.svc.zygote_secondary 2>/dev/null)" = "running" ]; then
-                setprop ctl.restart zygote_secondary
+                setprop ctl.restart zygote_secondary || reject_handoff 'zygote-secondary-restart-failed'
             fi
+
+            # Do not report success merely because this detached shell forked.
+            # The parent waits for this marker, which is published only after the
+            # child has root, the same boot, and a live Zygote to hand off to.
+            publish_handoff "${'$'}ACCEPTED_VALUE"
+
+            # Give the caller enough time to persist UI/history state after it
+            # observes the acknowledgement and before system_server is recreated.
+            sleep 0.75
             rm -f -- "${'$'}0"
             setprop ctl.restart zygote
         """.trimIndent() + "\n"
@@ -55,7 +74,8 @@ internal object RootRecoveryActions {
             scriptPath = scriptPath,
             logPath = logPath,
             script = script,
-            acceptedMarker = "RMG_ZYGOTE_RESTART_ACCEPTED",
+            acceptedPath = acceptedPath,
+            acceptedMarker = acceptedMarker,
         )
         if (!launch.accepted) launch else RootRecoveryResult(
             accepted = true,
@@ -71,6 +91,8 @@ internal object RootRecoveryActions {
         val token = actionToken()
         val resultPath = "/data/local/tmp/.rmg-module-reload-result-$token"
         val markerPath = "/data/local/tmp/.rmg-module-reload-complete-$token"
+        val acceptedPath = "/data/local/tmp/.rmg-module-reload-accepted-$token"
+        val acceptedMarker = "RMG_MODULE_RELOAD_ACCEPTED"
         val hookPath = "/data/adb/boot-completed.d/99-rmg-module-reload-$token.sh"
         val scriptPath = "/data/local/tmp/rmg-module-reload-$token.sh"
         val logPath = "/data/local/tmp/rmg-module-reload.log"
@@ -82,6 +104,8 @@ internal object RootRecoveryActions {
             TOKEN=${shellQuote(token)}
             RESULT=${shellQuote(resultPath)}
             MARKER=${shellQuote(markerPath)}
+            ACCEPTED=${shellQuote(acceptedPath)}
+            ACCEPTED_VALUE=${shellQuote(acceptedMarker)}
             HOOK=${shellQuote(hookPath)}
             LOCK=${shellQuote(lockPath)}
             KSUD='/data/adb/ksud'
@@ -93,6 +117,15 @@ internal object RootRecoveryActions {
                 printf '%s\n' "${'$'}1" > "${'$'}RESULT" 2>/dev/null || true
                 chmod 0666 "${'$'}RESULT" 2>/dev/null || true
             }
+            publish_handoff() {
+                printf '%s\n' "${'$'}1" > "${'$'}ACCEPTED" || exit 79
+                chmod 0666 "${'$'}ACCEPTED" 2>/dev/null || true
+            }
+            reject_handoff() {
+                publish_handoff "error:${'$'}1"
+                publish "error:${'$'}1"
+                exit 0
+            }
             cleanup() {
                 rm -f -- "${'$'}HOOK" "${'$'}MARKER" "${'$'}STAGE" "${'$'}0" 2>/dev/null
                 if [ "${'$'}(cat "${'$'}LOCK/token" 2>/dev/null)" = "${'$'}TOKEN" ]; then
@@ -101,22 +134,18 @@ internal object RootRecoveryActions {
             }
             trap cleanup EXIT INT TERM HUP
 
-            [ "${'$'}(id -u 2>/dev/null)" = "0" ] || { publish 'error:not-root'; exit 0; }
-            [ "${'$'}(current_boot)" = "${'$'}EXPECTED_BOOT" ] || { publish 'error:boot-changed'; exit 0; }
-            [ -x "${'$'}KSUD" ] || { publish 'error:installed-ksud-missing'; exit 0; }
-            grep -Fqx "boot_id=${'$'}EXPECTED_BOOT" "${'$'}READY" 2>/dev/null || {
-                publish 'error:global-readiness-missing'
-                exit 0
-            }
+            [ "${'$'}(id -u 2>/dev/null)" = "0" ] || reject_handoff 'not-root'
+            [ "${'$'}(current_boot)" = "${'$'}EXPECTED_BOOT" ] || reject_handoff 'boot-changed'
+            [ -x "${'$'}KSUD" ] || reject_handoff 'installed-ksud-missing'
+            grep -Fqx "boot_id=${'$'}EXPECTED_BOOT" "${'$'}READY" 2>/dev/null || reject_handoff 'global-readiness-missing'
 
             if ! mkdir "${'$'}LOCK" 2>/dev/null; then
                 LOCK_BOOT="${'$'}(cat "${'$'}LOCK/boot_id" 2>/dev/null)"
                 if [ "${'$'}LOCK_BOOT" = "${'$'}EXPECTED_BOOT" ]; then
-                    publish 'error:reload-already-running'
-                    exit 0
+                    reject_handoff 'reload-already-running'
                 fi
                 rm -rf -- "${'$'}LOCK" 2>/dev/null
-                mkdir "${'$'}LOCK" 2>/dev/null || { publish 'error:reload-lock-failed'; exit 0; }
+                mkdir "${'$'}LOCK" 2>/dev/null || reject_handoff 'reload-lock-failed'
             fi
             printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}LOCK/boot_id"
             printf '%s\n' "${'$'}TOKEN" > "${'$'}LOCK/token"
@@ -125,25 +154,28 @@ internal object RootRecoveryActions {
             # namespace switch. Use a byte-identical copy of the installed daemon
             # so this explicit recovery operation never introduces another build.
             rm -f -- "${'$'}STAGE"
-            /system/bin/cp "${'$'}KSUD" "${'$'}STAGE" || { publish 'error:ksud-stage-copy-failed'; exit 0; }
-            chmod 0755 "${'$'}STAGE" || { publish 'error:ksud-stage-chmod-failed'; exit 0; }
+            /system/bin/cp "${'$'}KSUD" "${'$'}STAGE" || reject_handoff 'ksud-stage-copy-failed'
+            chmod 0755 "${'$'}STAGE" || reject_handoff 'ksud-stage-chmod-failed'
             INSTALLED_HASH="${'$'}(sha256sum "${'$'}KSUD" 2>/dev/null)"
             INSTALLED_HASH="${'$'}{INSTALLED_HASH%% *}"
             STAGE_HASH="${'$'}(sha256sum "${'$'}STAGE" 2>/dev/null)"
             STAGE_HASH="${'$'}{STAGE_HASH%% *}"
-            [ -n "${'$'}INSTALLED_HASH" ] && [ "${'$'}INSTALLED_HASH" = "${'$'}STAGE_HASH" ] || {
-                publish 'error:ksud-stage-hash-mismatch'
-                exit 0
-            }
+            [ -n "${'$'}INSTALLED_HASH" ] && [ "${'$'}INSTALLED_HASH" = "${'$'}STAGE_HASH" ] || reject_handoff 'ksud-stage-hash-mismatch'
 
-            mkdir -p /data/adb/boot-completed.d
+            mkdir -p /data/adb/boot-completed.d || reject_handoff 'hook-dir-create-failed'
             cat > "${'$'}HOOK" <<RMG_RELOAD_HOOK
             #!/system/bin/sh
             printf '%s\n' '${token}' > '${markerPath}'
             chmod 0666 '${markerPath}' 2>/dev/null || true
             rm -f -- '${hookPath}'
             RMG_RELOAD_HOOK
-            chmod 0755 "${'$'}HOOK"
+            [ -s "${'$'}HOOK" ] || reject_handoff 'hook-write-failed'
+            chmod 0755 "${'$'}HOOK" || reject_handoff 'hook-chmod-failed'
+
+            # At this point the child owns a fully validated/staged reload. The
+            # caller may treat the handoff as accepted, but final success still
+            # requires the result marker plus restored PID1/global readiness.
+            publish_handoff "${'$'}ACCEPTED_VALUE"
 
             # The normal RMG path treats READY as a same-boot replay guard. The
             # user explicitly requested a reload, so clear it only after all
@@ -178,7 +210,8 @@ internal object RootRecoveryActions {
             scriptPath = scriptPath,
             logPath = logPath,
             script = script,
-            acceptedMarker = "RMG_MODULE_RELOAD_ACCEPTED",
+            acceptedPath = acceptedPath,
+            acceptedMarker = acceptedMarker,
         )
         if (!launch.accepted) return@withContext launch
 
@@ -257,15 +290,37 @@ internal object RootRecoveryActions {
         val token = actionToken()
         val scriptPath = "/data/local/tmp/rmg-reboot-unroot-$token.sh"
         val logPath = "/data/local/tmp/rmg-reboot-unroot.log"
+        val acceptedPath = "/data/local/tmp/.rmg-reboot-unroot-accepted-$token"
+        val acceptedMarker = "RMG_REBOOT_UNROOT_ACCEPTED"
         val script = """
             #!/system/bin/sh
             EXPECTED_BOOT=${shellQuote(bootId)}
+            ACCEPTED=${shellQuote(acceptedPath)}
+            ACCEPTED_VALUE=${shellQuote(acceptedMarker)}
             current_boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
+            publish_handoff() {
+                printf '%s\n' "${'$'}1" > "${'$'}ACCEPTED" || exit 79
+                chmod 0666 "${'$'}ACCEPTED" 2>/dev/null || true
+            }
+            reject_handoff() {
+                publish_handoff "error:${'$'}1"
+                rm -f -- "${'$'}0"
+                exit 0
+            }
 
-            [ "${'$'}(id -u 2>/dev/null)" = "0" ] || exit 62
-            [ "${'$'}(current_boot)" = "${'$'}EXPECTED_BOOT" ] || exit 60
-            sleep 0.75
+            [ "${'$'}(id -u 2>/dev/null)" = "0" ] || reject_handoff 'not-root'
+            [ "${'$'}(current_boot)" = "${'$'}EXPECTED_BOOT" ] || reject_handoff 'boot-changed'
+            [ -x /system/bin/reboot ] || reject_handoff 'reboot-command-missing'
+
+            # Flush persistent state before acknowledging the destructive handoff.
+            # Auto Root was synchronously disabled by the parent before this child
+            # was launched, so a successful acknowledgement is safe to commit to.
             sync
+            publish_handoff "${'$'}ACCEPTED_VALUE"
+
+            # Let the parent observe the child acknowledgement and update UI state
+            # before Android tears down the process tree.
+            sleep 0.75
             rm -f -- "${'$'}0"
             /system/bin/reboot
         """.trimIndent() + "\n"
@@ -275,7 +330,8 @@ internal object RootRecoveryActions {
             scriptPath = scriptPath,
             logPath = logPath,
             script = script,
-            acceptedMarker = "RMG_REBOOT_UNROOT_ACCEPTED",
+            acceptedPath = acceptedPath,
+            acceptedMarker = acceptedMarker,
         )
         if (!launch.accepted) {
             if (autoRootWasEnabled) AppPreferences.setAutoRootEnabledImmediately(context, true)
@@ -295,16 +351,25 @@ internal object RootRecoveryActions {
         return bootId
     }
 
+    /**
+     * Installs a detached recovery script, then waits for an acknowledgement that
+     * is written by that child itself after its own validation. A successful fork
+     * is deliberately not sufficient: this prevents false success when the boot,
+     * root session, Zygote state, or another child-side prerequisite changed in
+     * the handoff window.
+     */
     private fun launchDetachedScript(
         context: Context,
         scriptPath: String,
         logPath: String,
         script: String,
+        acceptedPath: String,
         acceptedMarker: String,
     ): RootRecoveryResult {
         val command = buildString {
             append("set -eu\n")
             append("script=${shellQuote(scriptPath)}\n")
+            append("accepted=${shellQuote(acceptedPath)}\n")
             append("tmp=\"${'$'}script.tmp.${'$'}${'$'}\"\n")
             append("cat > \"${'$'}tmp\" <<'RMG_RECOVERY_EOF'\n")
             append(script)
@@ -312,19 +377,57 @@ internal object RootRecoveryActions {
             append("RMG_RECOVERY_EOF\n")
             append("chmod 0700 \"${'$'}tmp\"\n")
             append("mv -f \"${'$'}tmp\" \"${'$'}script\"\n")
+            append("rm -f -- \"${'$'}accepted\"\n")
             append(": > ${shellQuote(logPath)}\n")
             append("chmod 0666 ${shellQuote(logPath)} 2>/dev/null || true\n")
             append("setsid sh \"${'$'}script\" >>${shellQuote(logPath)} 2>&1 < /dev/null &\n")
-            append("echo ${shellQuote(acceptedMarker)}\n")
         }
         val launch = RootHelperShell.shell(context, command)
-        val accepted = launch.exitCode == 0 && launch.output.contains(acceptedMarker)
+        if (launch.exitCode != 0) {
+            return RootRecoveryResult(
+                accepted = false,
+                detail = launch.output.trim().ifBlank { "Unable to launch detached recovery action" }.takeLast(320),
+            )
+        }
+
+        val acknowledgement = RootHelperShell.shell(
+            context,
+            buildString {
+                append("accepted=${shellQuote(acceptedPath)}\n")
+                append("i=0\n")
+                append("while [ \"${'$'}i\" -lt 100 ]; do\n")
+                append("  if [ -s \"${'$'}accepted\" ]; then\n")
+                append("    ack=\"${'$'}(cat \"${'$'}accepted\" 2>/dev/null || true)\"\n")
+                append("    rm -f -- \"${'$'}accepted\"\n")
+                append("    printf '%s\\n' \"${'$'}ack\"\n")
+                append("    [ \"${'$'}ack\" = ${shellQuote(acceptedMarker)} ] && exit 0\n")
+                append("    exit 78\n")
+                append("  fi\n")
+                append("  i=\"${'$'}((${ '$' }i + 1))\"\n")
+                append("  sleep 0.1\n")
+                append("done\n")
+                append("rm -f -- \"${'$'}accepted\"\n")
+                append("echo 'recovery child did not publish accepted handoff marker' >&2\n")
+                append("tail -n 8 ${shellQuote(logPath)} >&2 2>/dev/null || true\n")
+                append("exit 78\n")
+            },
+        )
+        val accepted = acknowledgement.exitCode == 0 &&
+            acknowledgement.output.lineSequence().any { it.trim() == acceptedMarker }
+        val childError = acknowledgement.output.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("error:") }
+            ?.removePrefix("error:")
+            ?.replace('-', ' ')
+
         return RootRecoveryResult(
             accepted = accepted,
             detail = if (accepted) {
                 acceptedMarker
             } else {
-                launch.output.trim().ifBlank { "Unable to launch detached recovery action" }.takeLast(320)
+                childError ?: acknowledgement.output.trim()
+                    .ifBlank { "Recovery child did not acknowledge the action" }
+                    .takeLast(320)
             },
         )
     }
