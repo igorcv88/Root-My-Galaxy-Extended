@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
     <string name="restart_zygote_after_root_title">Restart Zygote after root</string>
     <string name="restart_zygote_after_root_description">After KernelSU is verified, recreate Zygote and system_server so Zygisk and LSPosed can attach without a full KernelSU userspace reboot.</string>
     <string name="zygote_restart_starting">Restarting Zygote after root</string>
