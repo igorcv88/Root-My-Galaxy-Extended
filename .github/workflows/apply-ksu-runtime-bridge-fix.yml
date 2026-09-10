@@ -29,7 +29,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
 
       - name: Apply patch
-        run: python3 .github/scripts/apply-ksu-runtime-bridge-fix.py
+        run: |
+          python3 .github/scripts/apply-ksu-runtime-bridge-fix.py
+          python3 .github/scripts/fix-ksu-runtime-test-quotes.py
 
       - name: Validate source and build
         run: |
