@@ -18,7 +18,11 @@ internal enum class AutoRootStage {
 private data class AutoRootCommandResult(val code: Int, val output: String)
 
 /**
- * Auto Root executes the last-known-good payload in a fresh standalone process.
+ * Auto Root executes the exact last-known-good offline payload from a fresh
+ * executor. Legacy targets use the app transport; a target whose route policy
+ * prefers shell is fail-closed onto Shizuku shell so tracefs is never silently
+ * attempted from an untrusted-app SELinux domain.
+ *
  * KernelSU is expected to auto-late-load from the UMH root helper as soon as
  * bootstrap root lands. The historical client stage/--late-load path remains a
  * fallback when the persisted /data/local/tmp ksud is unavailable.
@@ -33,11 +37,23 @@ internal class AutoRootRunner(
             "Auto Root requires the last-known-good offline payload"
         }
 
+        val useShellTransport = payloads.profile.routePolicy.prefersShellTransport
+        val transport = if (useShellTransport) {
+            ExploitRoutePolicy.SHELL_TRANSPORT
+        } else {
+            ExploitRoutePolicy.APP_TRANSPORT
+        }
+
         onStage(AutoRootStage.PreparingExploit)
-        onLog("[*] profile=${payloads.profile.profileId} transport=standalone source=offline")
+        onLog("[*] profile=${payloads.profile.profileId} transport=$transport source=offline")
 
         onStage(AutoRootStage.RunningExploit)
-        executeExploit(payloads.exploit, bootToken, payloads.profile.routePolicy)
+        executeExploit(
+            payloads.exploit,
+            bootToken,
+            payloads.profile.routePolicy,
+            useShellTransport,
+        )
 
         onStage(AutoRootStage.LoadingKernelSu)
         val autoLoaded = waitForAutoLateLoad(bootToken)
@@ -132,26 +148,20 @@ internal class AutoRootRunner(
         payload: File,
         bootToken: String,
         policy: ExploitRoutePolicy,
+        useShellTransport: Boolean,
     ) {
-        // Auto Root runs the payload from the app's own domain, so it shares
-        // the profile's route policy but never claims the shell transport.
-        onLog(policy.describe(ExploitRoutePolicy.APP_TRANSPORT))
-        val logFile = File(context.filesDir, "autoroot-exploit.log")
-        logFile.delete()
+        val transport = if (useShellTransport) {
+            ExploitRoutePolicy.SHELL_TRANSPORT
+        } else {
+            ExploitRoutePolicy.APP_TRANSPORT
+        }
+        onLog(policy.describe(transport))
 
-        val helper = helperFile()
-        require(helper.canExecute()) { context.getString(R.string.error_helper_unavailable) }
+        val localLogFile = File(context.filesDir, "autoroot-exploit.log")
+        if (!useShellTransport) localLogFile.delete()
 
-        val processBuilder = ProcessBuilder(
-            helper.absolutePath,
-            "--run-payload",
-            payload.absolutePath,
-            helper.absolutePath,
-            logFile.absolutePath,
-        ).redirectErrorStream(true)
-        processBuilder.environment().putAll(
-            policy.environment(cachedP0Offset(bootToken)),
-        )
+        val localHelper = helperFile()
+        require(localHelper.canExecute()) { context.getString(R.string.error_helper_unavailable) }
 
         val originalThreadPriority = runCatching {
             Process.getThreadPriority(Process.myTid())
@@ -159,11 +169,56 @@ internal class AutoRootRunner(
 
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
         val process = try {
-            processBuilder.start().also {
+            val launched = if (useShellTransport) {
+                require(ShizukuController.isGranted()) {
+                    "Shizuku shell transport is not authorized"
+                }
+
+                val cleanup = ShizukuController.exec(
+                    arrayOf("rm", "-f", SHIZUKU_LOG_PATH),
+                )
+                try {
+                    require(cleanup.waitFor() == 0) {
+                        "Unable to clear the Auto Root shell log"
+                    }
+                } finally {
+                    if (cleanup.isAlive) cleanup.destroy()
+                }
+
+                val stagedHelper = shizukuStage(localHelper, SHIZUKU_HELPER_PATH)
+                val stagedPayload = shizukuStage(payload, SHIZUKU_PAYLOAD_PATH)
+                ShizukuController.exec(
+                    arrayOf(
+                        stagedHelper.absolutePath,
+                        "--run-payload",
+                        stagedPayload.absolutePath,
+                        stagedHelper.absolutePath,
+                        SHIZUKU_LOG_PATH,
+                    ),
+                    shizukuEnvironment(bootToken, stagedHelper.absolutePath, policy),
+                    "/data/local/tmp",
+                )
+            } else {
+                val processBuilder = ProcessBuilder(
+                    localHelper.absolutePath,
+                    "--run-payload",
+                    payload.absolutePath,
+                    localHelper.absolutePath,
+                    localLogFile.absolutePath,
+                ).redirectErrorStream(true)
+                processBuilder.environment().putAll(
+                    policy.environment(cachedP0Offset(bootToken)),
+                )
+                processBuilder.start()
+            }
+
+            launched.also {
                 val lowered = runCatching {
                     Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
                 }.isSuccess
-                if (!lowered) runCatching { Process.setThreadPriority(originalThreadPriority) }
+                if (!lowered) runCatching {
+                    Process.setThreadPriority(originalThreadPriority)
+                }
             }
         } catch (error: Throwable) {
             runCatching { Process.setThreadPriority(originalThreadPriority) }
@@ -173,7 +228,11 @@ internal class AutoRootRunner(
         val captured = StringBuilder()
         fun readLog(): String {
             drainProcessOutput(process, captured)
-            return logFile.readTextIfPresent()
+            return if (useShellTransport) {
+                captured.toString()
+            } else {
+                localLogFile.readTextIfPresent()
+            }
         }
 
         try {
@@ -194,7 +253,13 @@ internal class AutoRootRunner(
                 require(now - startedAt < EXPLOIT_TOTAL_MILLIS) {
                     context.getString(R.string.error_exploit_timeout)
                 }
-                delay(LOG_POLL_INTERVAL)
+                delay(
+                    if (useShellTransport) {
+                        SHIZUKU_LOG_POLL_INTERVAL
+                    } else {
+                        LOG_POLL_INTERVAL
+                    },
+                )
             }
 
             val exitCode = process.waitFor()
@@ -223,6 +288,29 @@ internal class AutoRootRunner(
         }
         onLog(context.getString(R.string.log_bootstrap_root))
     }
+
+    private fun shizukuStage(source: File, target: String): File {
+        try {
+            ShizukuController.writeFile(target, "755", source.inputStream())
+        } catch (error: Throwable) {
+            throw IllegalStateException(
+                "Unable to stage Auto Root shell artifact $target: ${error.message.orEmpty()}",
+                error,
+            )
+        }
+        return File(target)
+    }
+
+    private fun shizukuEnvironment(
+        bootToken: String,
+        helperPath: String,
+        policy: ExploitRoutePolicy,
+    ): Array<String> = buildList {
+        add("CVE43499_ROOT_HELPER=$helperPath")
+        policy.environment(cachedP0Offset(bootToken)).forEach { (key, value) ->
+            add("$key=$value")
+        }
+    }.toTypedArray()
 
     private suspend fun stageKernelSuRequired(payloads: VerifiedPayloads) {
         val stage = stageKernelSuAtomically(payloads)
@@ -337,7 +425,11 @@ internal class AutoRootRunner(
         private const val KSUD_STAGE_PATH = "/data/local/tmp/.ksud-stage"
         private const val KSUD_REFRESH_PATH = "/data/local/tmp/.ksud-refresh"
         private const val KSUD_STAGE_REFRESH_PATH = "/data/local/tmp/.ksud-stage-refresh"
+        private const val SHIZUKU_LOG_PATH = "/data/local/tmp/autoroot-exploit.log"
+        private const val SHIZUKU_HELPER_PATH = "/data/local/tmp/autoroot-helper"
+        private const val SHIZUKU_PAYLOAD_PATH = "/data/local/tmp/autoroot-payload"
         private val LOG_POLL_INTERVAL = 250.milliseconds
+        private val SHIZUKU_LOG_POLL_INTERVAL = 1_000.milliseconds
         private val HELPER_POLL_INTERVAL = 250.milliseconds
         private val AUTO_LATE_LOAD_POLL_INTERVAL = 400.milliseconds
         private val ANSI_ESCAPE = Regex("\u001B\\[[0-?]*[ -/]*[@-~]")

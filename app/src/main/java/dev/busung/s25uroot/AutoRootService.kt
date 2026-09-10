@@ -172,6 +172,15 @@ class AutoRootService : Service() {
                 getString(R.string.autoroot_prior_install_required)
             }
 
+            val shellTransportRequired = AutoRootSupport.requiresShellTransport(this)
+            if (shellTransportRequired) {
+                // On ZZI4 the exploit route needs u:r:shell:s0 for tracefs. Start
+                // Shizuku before the uptime gate instead of letting the two boot
+                // automations race each other.
+                ShizukuBootService.startForAutoRoot(this)
+                Log.i(TAG, "Auto Root target requires shell transport; prioritizing Shizuku bootstrap")
+            }
+
             if (NativeProbe.isKernelSuActive()) {
                 AutoRootSupport.markVerifiedForBoot(this, initialBootToken)
                 Log.i(TAG, "Auto Root skipped: KernelSU already active for this kernel boot")
@@ -206,13 +215,9 @@ class AutoRootService : Service() {
 
             updateNotification(getString(R.string.autoroot_checking_firmware))
 
-            // Consume the once-per-boot attempt only when execution is actually
-            // ready to hand off. A killed gate during the stabilization wait no
-            // longer burns the only automatic attempt for the boot.
-            require(AutoRootSupport.claimAttempt(this, bootToken)) {
-                getString(R.string.autoroot_already_attempted)
-            }
-
+            // Do not consume the once-per-boot exploit attempt here. The fresh
+            // executor claims it only after the exact target has been loaded and
+            // any shell transport prerequisite is actually ready.
             pendingBootToken = bootToken
             val executorIntent = Intent(this, AutoRootExecutorService::class.java)
                 .setAction(AutoRootExecutorService.ACTION_RUN_AUTO_ROOT)

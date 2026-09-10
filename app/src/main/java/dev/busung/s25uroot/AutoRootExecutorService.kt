@@ -27,9 +27,11 @@ import kotlinx.coroutines.launch
  * Fresh process used only for the critical Auto Root execution window.
  *
  * The foreground gate binds this service at the configured launch uptime with
- * BIND_IMPORTANT | BIND_ABOVE_CLIENT. Auto Root is always offline and always
- * standalone. onBind() has no execution side effect: the gate must first connect
- * and then send an explicit start command over Messenger.
+ * BIND_IMPORTANT | BIND_ABOVE_CLIENT. Auto Root is always offline. Legacy
+ * targets remain standalone; targets whose route policy requires shell wait for
+ * the boot Shizuku transport before consuming their once-per-boot exploit attempt.
+ * onBind() has no execution side effect: the gate must first connect and then send
+ * an explicit start command over Messenger.
  */
 class AutoRootExecutorService : Service() {
     private val dispatcher: ExecutorCoroutineDispatcher =
@@ -127,18 +129,40 @@ class AutoRootExecutorService : Service() {
                 result = InstallRunResult.Running,
                 profileId = null,
                 usedShizuku = false,
-                log = "[*] Auto Root started: fresh executor, offline cache, standalone transport",
+                log = "[*] Auto Root started: fresh executor, offline cache",
             )
 
             val payloads = AutoRootSupport.loadVerifiedLocalPayloads(this)
             require(payloads.source == PayloadSource.Offline) {
                 "Auto Root requires the last-known-good offline payload"
             }
+            val shellTransportRequired = payloads.profile.routePolicy.prefersShellTransport
             val currentHistory = historyEntry ?: error("Auto Root history state missing")
             historyEntry = currentHistory.copy(
                 profileId = payloads.profile.profileId,
-                log = currentHistory.log + "\n[*] profile=${payloads.profile.profileId}",
+                usedShizuku = shellTransportRequired,
+                log = currentHistory.log +
+                    "\n[*] profile=${payloads.profile.profileId} transport=" +
+                    if (shellTransportRequired) "shell-required" else "standalone",
             )
+
+            if (shellTransportRequired) {
+                updateNotification(getString(R.string.autoroot_preparing_exploit))
+                appendHistory("[*] Waiting for Shizuku shell transport required by target policy")
+                ShizukuBootService.startForAutoRoot(this)
+                require(ShizukuController.awaitRunning(AUTO_ROOT_SHIZUKU_WAIT_MILLIS)) {
+                    "Shizuku did not become available for the shell-required Auto Root route"
+                }
+                require(ShizukuController.isGranted()) {
+                    "Root My Galaxy is not authorized to use Shizuku for the shell-required Auto Root route"
+                }
+                appendHistory("[+] Shizuku shell transport is ready")
+            }
+
+            require(AutoRootSupport.claimAttempt(this, bootToken)) {
+                getString(R.string.autoroot_already_attempted)
+            }
+            appendHistory("[*] Once-per-boot exploit attempt claimed after transport readiness")
 
             var lastRunnerSnapshot = ""
             val runner = AutoRootRunner(
@@ -328,6 +352,7 @@ class AutoRootExecutorService : Service() {
         const val MSG_START_AUTO_ROOT = 1
 
         private const val TAG = "RootMyGalaxyAutoRootExec"
+        private const val AUTO_ROOT_SHIZUKU_WAIT_MILLIS = 90_000L
         private const val MAX_EXECUTOR_WAKELOCK_MILLIS = 20 * 60 * 1_000L
     }
 }

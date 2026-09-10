@@ -42,13 +42,14 @@ import kotlinx.coroutines.suspendCancellableCoroutine
  * that probe fails closed and the existing event-driven Wi-Fi/ADB path remains
  * unchanged.
  *
- * Auto Root remains independent. If Wi-Fi only appears near the configured
- * exploit gate, RMG yields through a small critical window rather than starting
- * mDNS/ADB beside the exploit.
+ * For targets whose Auto Root route requires shell, Shizuku is a prerequisite:
+ * RMG therefore prioritizes this bootstrap and Auto Root waits for it. Legacy targets
+ * keep the old critical-window guard so mDNS/ADB still does not perturb their exploit.
  */
 class ShizukuBootService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var bootstrapJob: Job? = null
+    @Volatile private var autoRootPriority = false
 
     override fun onCreate() {
         super.onCreate()
@@ -56,7 +57,11 @@ class ShizukuBootService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!isConfigured(this)) {
+        if (intent?.getBooleanExtra(EXTRA_AUTO_ROOT_PRIORITY, false) == true) {
+            autoRootPriority = true
+            Log.i(TAG, "Auto Root requested priority Shizuku bootstrap")
+        }
+        if (!shouldRun()) {
             stopSelf(startId)
             return START_NOT_STICKY
         }
@@ -112,22 +117,26 @@ class ShizukuBootService : Service() {
         val rootOutcome = tryExistingKernelSuRootStarterOnce()
         if (rootOutcome?.started == true) return
 
-        // If the fork's own BOOT_COMPLETED receiver is enabled, give its unique
-        // WorkManager job a longer head start. With Tasker/other starters we still
-        // provide a short generic grace period. This makes dual configuration a
-        // redundancy setup rather than an immediate two-starter race.
+        if (autoRootRequiresShellTransport()) {
+            autoRootPriority = true
+            Log.i(TAG, "Shell-dependent Auto Root detected; Shizuku bootstrap owns boot priority")
+        }
+
+        // Give another starter only a short chance. The fork's ADB path is a
+        // WorkManager job and can be scheduler-delayed after BOOT_COMPLETED;
+        // RMG must not wait on that scheduler when its own paired ADB path is available.
         val externalBootStarter = ShizukuIntentStarter.isShizukuBootReceiverEnabled(this)
-        val coexistenceGrace = if (externalBootStarter) {
-            SHIZUKU_OWN_BOOT_GRACE_MILLIS
-        } else {
-            GENERIC_STARTER_GRACE_MILLIS
+        val coexistenceGrace = when {
+            autoRootPriority -> AUTO_ROOT_STARTER_GRACE_MILLIS
+            externalBootStarter -> SHIZUKU_OWN_BOOT_GRACE_MILLIS
+            else -> GENERIC_STARTER_GRACE_MILLIS
         }
         if (ShizukuController.awaitRunning(coexistenceGrace)) {
             Log.i(TAG, "Another boot starter produced the Shizuku Binder; RMG stayed idle")
             return
         }
 
-        while (currentCoroutineContext().isActive && isConfigured(this)) {
+        while (currentCoroutineContext().isActive && shouldRun()) {
             if (ShizukuController.isRunning()) return
 
             // KernelSU can become available while the service is alive (for
@@ -359,12 +368,20 @@ class ShizukuBootService : Service() {
 
     private fun autoRootCriticalDelayMillis(): Long {
         if (!AppPreferences.autoRootEnabled(this)) return 0L
+        if (autoRootPriority || autoRootRequiresShellTransport()) return 0L
         val gate = AppPreferences.autoRootBootMinUptimeSeconds(this) * 1_000L
         val start = (gate - AUTO_ROOT_GUARD_BEFORE_MILLIS).coerceAtLeast(0L)
         val end = gate + AUTO_ROOT_GUARD_AFTER_MILLIS
         val now = SystemClock.elapsedRealtime()
         return if (now in start until end) end - now else 0L
     }
+
+    private fun autoRootRequiresShellTransport(): Boolean =
+        AppPreferences.autoRootEnabled(this) &&
+            runCatching { AutoRootSupport.requiresShellTransport(this) }.getOrDefault(false)
+
+    private fun shouldRun(): Boolean =
+        autoRootPriority || AppPreferences.startShizukuOnBoot(this)
 
     private fun looksLikePairingLoss(message: String): Boolean {
         val lower = message.lowercase()
@@ -414,9 +431,10 @@ class ShizukuBootService : Service() {
         private const val SHIZUKU_BOOT_NOTIFICATION_ID = 43501
 
         private const val BINDER_INITIAL_PROBE_MILLIS = 1_500L
-        private const val GENERIC_STARTER_GRACE_MILLIS = 4_000L
-        private const val SHIZUKU_OWN_BOOT_GRACE_MILLIS = 20_000L
-        private const val AFTER_WIFI_COEXISTENCE_GRACE_MILLIS = 5_000L
+        private const val AUTO_ROOT_STARTER_GRACE_MILLIS = 750L
+        private const val GENERIC_STARTER_GRACE_MILLIS = 1_500L
+        private const val SHIZUKU_OWN_BOOT_GRACE_MILLIS = 2_000L
+        private const val AFTER_WIFI_COEXISTENCE_GRACE_MILLIS = 1_000L
         private const val WIRELESS_ADB_ENABLE_SETTLE_MILLIS = 800L
         private const val PORT_DISCOVERY_ATTEMPT_MILLIS = 15_000L
         private const val BINDER_START_TIMEOUT_MILLIS = 12_000L
@@ -429,19 +447,22 @@ class ShizukuBootService : Service() {
         private const val DIRECT_SU_COMMAND_TIMEOUT_MILLIS = 15_000L
 
         fun startIfConfigured(context: Context) {
-            if (!isConfigured(context)) return
+            if (!AppPreferences.startShizukuOnBoot(context)) return
             context.startForegroundService(Intent(context, ShizukuBootService::class.java))
+        }
+
+        fun startForAutoRoot(context: Context) {
+            context.startForegroundService(
+                Intent(context, ShizukuBootService::class.java)
+                    .putExtra(EXTRA_AUTO_ROOT_PRIORITY, true),
+            )
         }
 
         fun stop(context: Context) {
             context.stopService(Intent(context, ShizukuBootService::class.java))
         }
 
-        private fun isConfigured(context: Context): Boolean {
-            if (!AppPreferences.startShizukuOnBoot(context)) return false
-            return NativeProbe.isKernelSuActive() ||
-                AppPreferences.adbPaired(context) ||
-                AppPreferences.shizukuAutomationToken(context).isNotBlank()
-        }
+        private const val EXTRA_AUTO_ROOT_PRIORITY =
+            "dev.busung.s25uroot.extra.SHIZUKU_BOOT_AUTO_ROOT_PRIORITY"
     }
 }

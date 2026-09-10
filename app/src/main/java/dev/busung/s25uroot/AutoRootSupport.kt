@@ -25,6 +25,15 @@ internal object AutoRootSupport {
         return receipt && KnownGoodPayloadStore.hasValid(context)
     }
 
+    /**
+     * Target transport prerequisite from the exact, last-known-good offline profile.
+     * This is read before the exploit window so shell-dependent targets can bring
+     * Shizuku up first instead of racing it. The actual executor revalidates the
+     * same cache again before claiming the once-per-boot exploit attempt.
+     */
+    fun requiresShellTransport(context: Context): Boolean =
+        KnownGoodPayloadStore.load(context).profile.routePolicy.prefersShellTransport
+
     fun verifiedBootToken(context: Context): String? {
         val preferences = context.getSharedPreferences(INSTALL_RECEIPT, Context.MODE_PRIVATE)
         if (!preferences.getBoolean(RECEIPT_VERIFIED, false)) return null
