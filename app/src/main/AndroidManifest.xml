@@ -58,6 +58,9 @@
             android:exported="false"
             android:process=":autoroot_exec" />
         <service
+            android:name=".AutoRootShellExecutorService"
+            android:exported="false" />
+        <service
             android:name=".ShizukuBootService"
             android:enabled="true"
             android:exported="false"
