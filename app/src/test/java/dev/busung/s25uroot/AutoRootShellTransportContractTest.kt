@@ -23,19 +23,60 @@ class AutoRootShellTransportContractTest {
     }
 
     @Test
-    fun shellRequiredAutoRootWaitsBeforeClaimingAttempt() {
+    fun shellRequiredAutoRootSelectsRealShellBeforeClaimingAttempt() {
         val executor = source("AutoRootExecutorService.kt")
-        val wait = executor.indexOf(
-            "ShizukuController.awaitRunning(AUTO_ROOT_SHIZUKU_WAIT_MILLIS)",
-        )
-        val grant = executor.indexOf("ShizukuController.isGranted()", wait)
-        val claim = executor.indexOf("AutoRootSupport.claimAttempt(this, bootToken)")
-        assertTrue(wait >= 0)
-        assertTrue(grant > wait)
-        assertTrue(claim > grant)
+        assertTrue(executor.contains("AutoRootShellTransport.Shizuku"))
+        assertTrue(executor.contains("AutoRootShellTransport.LocalAdb"))
+        assertTrue(executor.contains("AppPreferences.adbPaired(this)"))
+        assertTrue(executor.contains("AUTO_ROOT_SHIZUKU_PREFERENCE_GRACE_MILLIS"))
+
+        val runnerCall = executor.indexOf("runner.run(")
+        val callback = executor.indexOf("beforeExploit = {", runnerCall)
+        val claim = executor.indexOf("AutoRootSupport.claimAttempt(this, bootToken)", callback)
+        assertTrue(runnerCall >= 0)
+        assertTrue(callback > runnerCall)
+        assertTrue(claim > callback)
+        assertFalse(executor.substring(0, runnerCall).contains("AutoRootSupport.claimAttempt(this, bootToken)"))
 
         val gate = source("AutoRootService.kt")
         assertFalse(gate.contains("AutoRootSupport.claimAttempt(this, bootToken)"))
+    }
+
+    @Test
+    fun localAdbFallbackRemainsRealShellAndNeverAppFallback() {
+        val runner = source("AutoRootRunner.kt")
+        assertTrue(runner.contains("executeExploitViaLocalAdb("))
+        assertTrue(runner.contains("AutoRootShellTransport.LocalAdb"))
+        assertTrue(runner.contains("WirelessAdbSession.open("))
+        assertTrue(runner.contains("identity.output.contains(\"uid=2000\")"))
+        assertTrue(runner.contains("identity.output.contains(\"u:r:shell:s0\")"))
+        assertTrue(runner.contains("session.push(localHelper, SHELL_HELPER_PATH"))
+        assertTrue(runner.contains("session.push(payload, SHELL_PAYLOAD_PATH"))
+        assertTrue(runner.contains("session.runStreaming("))
+        assertTrue(runner.contains("ExploitRoutePolicy.SHELL_TRANSPORT"))
+        assertTrue(runner.contains("Shell-required Auto Root has no usable shell transport"))
+    }
+
+    @Test
+    fun localAdbStagesExactArtifactsBeforeClaimCallback() {
+        val runner = source("AutoRootRunner.kt")
+        val fallback = runner.indexOf("private suspend fun executeExploitViaLocalAdb(")
+        val helperPush = runner.indexOf("session.push(localHelper, SHELL_HELPER_PATH", fallback)
+        val payloadPush = runner.indexOf("session.push(payload, SHELL_PAYLOAD_PATH", helperPush)
+        val claimCallback = runner.indexOf("beforeExploit()", payloadPush)
+        val launch = runner.indexOf("session.runStreaming(", claimCallback)
+        assertTrue(fallback >= 0)
+        assertTrue(helperPush > fallback)
+        assertTrue(payloadPush > helperPush)
+        assertTrue(claimCallback > payloadPush)
+        assertTrue(launch > claimCallback)
+    }
+
+    @Test
+    fun temporaryAdbUsersAreSerialized() {
+        val temporaryAdb = source("TemporaryWirelessAdb.kt")
+        assertTrue(temporaryAdb.contains("private val sessionMutex = Mutex()"))
+        assertTrue(temporaryAdb.contains("sessionMutex.withLock"))
     }
 
     @Test
@@ -61,16 +102,6 @@ class AutoRootShellTransportContractTest {
         val standaloneServiceEnd = manifest.indexOf("/>", standaloneServiceStart)
         val standaloneDeclaration = manifest.substring(standaloneServiceStart, standaloneServiceEnd + 2)
         assertTrue(standaloneDeclaration.contains("android:process=\":autoroot_exec\""))
-    }
-
-    @Test
-    fun autoRootRunnerHonorsShellRouteInsteadOfAppFallback() {
-        val runner = source("AutoRootRunner.kt")
-        assertTrue(runner.contains("payloads.profile.routePolicy.prefersShellTransport"))
-        assertTrue(runner.contains("ExploitRoutePolicy.SHELL_TRANSPORT"))
-        assertTrue(runner.contains("ShizukuController.exec("))
-        assertTrue(runner.contains("shizukuStage(localHelper, SHIZUKU_HELPER_PATH)"))
-        assertFalse(runner.contains("never claims the shell transport"))
     }
 
     @Test
