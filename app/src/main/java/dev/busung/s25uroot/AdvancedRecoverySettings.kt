@@ -61,6 +61,8 @@ internal fun AdvancedRecoverySettings(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val acceptedMessageTemplate = stringResource(R.string.recovery_action_accepted)
+    val failedMessageTemplate = stringResource(R.string.recovery_action_failed)
     var runningTool by remember { mutableStateOf<RecoveryTool?>(null) }
 
     fun runTool(tool: RecoveryTool, operation: suspend () -> RootRecoveryResult) {
@@ -74,13 +76,14 @@ internal fun AdvancedRecoverySettings(
                         detail = error.message ?: error.javaClass.simpleName,
                     )
                 }
+            val messageTemplate = if (result.accepted) {
+                acceptedMessageTemplate
+            } else {
+                failedMessageTemplate
+            }
             Toast.makeText(
                 context,
-                if (result.accepted) {
-                    context.getString(R.string.recovery_action_accepted, result.detail)
-                } else {
-                    context.getString(R.string.recovery_action_failed, result.detail)
-                },
+                String.format(messageTemplate, result.detail),
                 Toast.LENGTH_LONG,
             ).show()
             runningTool = null
@@ -150,13 +153,9 @@ internal fun AdvancedRecoverySettings(
                 shape = recoveryShape(bottom = true),
                 onConfirmed = {
                     if (runningTool != null || !rootActive) return@HoldRecoveryCard
-                    val autoRootWasEnabled = autoRootEnabled
-                    if (autoRootWasEnabled) onAutoRootEnabledChanged(false)
                     runTool(RecoveryTool.RebootUnroot) {
                         val result = RootRecoveryActions.rebootAndUnroot(context)
-                        if (!result.accepted && autoRootWasEnabled) {
-                            onAutoRootEnabledChanged(true)
-                        }
+                        if (result.accepted) onAutoRootEnabledChanged(false)
                         result
                     }
                 },
