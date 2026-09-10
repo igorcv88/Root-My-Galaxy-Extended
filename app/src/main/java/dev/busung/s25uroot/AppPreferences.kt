@@ -84,6 +84,14 @@ object AppPreferences {
         prefs(context).edit().putBoolean(AUTO_ROOT_ENABLED, enabled).apply()
     }
 
+    /**
+     * Used only before a destructive reboot. `commit()` is deliberate: a reboot
+     * must not race the asynchronous SharedPreferences disk write and come back
+     * with Auto Root still enabled.
+     */
+    internal fun setAutoRootEnabledImmediately(context: Context, enabled: Boolean): Boolean =
+        prefs(context).edit().putBoolean(AUTO_ROOT_ENABLED, enabled).commit()
+
     fun restartZygoteAfterRoot(context: Context): Boolean =
         prefs(context).getBoolean(RESTART_ZYGOTE_AFTER_ROOT, false)
 
