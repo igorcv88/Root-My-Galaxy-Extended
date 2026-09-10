@@ -57,10 +57,11 @@ class AutoRootShellTransportContractTest {
     }
 
     @Test
-    fun shizukuBinderSharingIsEnabledForSecondaryProcesses() {
+    fun shizukuBinderSharingIsEnabledAndRequestedInSecondaryProcesses() {
         val app = source("RootMyGalaxyApplication.kt")
         assertTrue(app.contains("ShizukuProvider.enableMultiProcessSupport"))
         assertTrue(app.contains("Application.getProcessName() == base.packageName"))
+        assertTrue(app.contains("ShizukuProvider.requestBinderForNonProviderProcess(this)"))
         assertTrue(manifest().contains("android:name=\".RootMyGalaxyApplication\""))
     }
 }
