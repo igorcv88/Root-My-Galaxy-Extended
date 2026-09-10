@@ -50,6 +50,25 @@ data class TargetCatalogUiState(
 
 private data class CommandResult(val code: Int, val output: String)
 
+internal enum class ManualRunTransport {
+    App,
+    Shizuku,
+    LocalAdb,
+}
+
+internal fun chooseManualRunTransport(
+    shellRequired: Boolean,
+    shizukuRequested: Boolean,
+    shizukuUsable: Boolean,
+    localAdbPaired: Boolean,
+): ManualRunTransport? {
+    if (shizukuRequested && shizukuUsable) return ManualRunTransport.Shizuku
+    if (shellRequired) {
+        return if (localAdbPaired) ManualRunTransport.LocalAdb else null
+    }
+    return if (shizukuRequested) null else ManualRunTransport.App
+}
+
 /**
  * Payloads are truncated to a fixed release size, so a rebuild of a target --
  * or a different target padded to the same size -- has exactly the length of
@@ -86,7 +105,8 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     private var activeHistoryEntry: InstallHistoryEntry? = null
 
     @Volatile
-    private var activeRunShizuku: Boolean? = null
+    private var activeRunTransport: ManualRunTransport? = null
+    private var activeLocalAdbSession: WirelessAdbSession? = null
     val state: StateFlow<InstallUiState> = mutableState.asStateFlow()
     val history: StateFlow<List<InstallHistoryEntry>> = mutableHistory.asStateFlow()
     val targetCatalog: StateFlow<TargetCatalogUiState> = mutableTargetCatalog.asStateFlow()
@@ -158,21 +178,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 probeOutput = mutableState.value.probeOutput,
             )
             startHistory()
-            // Freeze the transport for the whole run so a mid-run preference
-            // change cannot mix Shizuku and standalone execution between the
-            // exploit and the KernelSU staging steps.
-            activeRunShizuku = AppPreferences.shizukuMode(app)
             try {
-                if (shizukuEnabled()) {
-                    appendLog(app.getString(R.string.log_shizuku_prepare))
-                    if (!ShizukuController.isRunning() && !ShizukuController.pingUntilRunning()) {
-                        error(app.getString(R.string.error_shizuku_unavailable))
-                    }
-                    if (!ShizukuController.isGranted() && !ShizukuController.requestPermission()) {
-                        error(app.getString(R.string.error_shizuku_permission))
-                    }
-                    appendLog(app.getString(R.string.log_shizuku_permission))
-                }
                 setPhase(InstallPhase.Checking, app.getString(R.string.status_checking_github))
                 val profile = if (profileId == null) {
                     repository.resolveTarget(DeviceSnapshot.current())
@@ -181,6 +187,15 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 }
                 appendLog(app.getString(R.string.log_profile, profile.profileId))
                 updateHistoryProfile(profile.profileId)
+
+                activeRunTransport = selectRunTransport(profile)
+                appendLog(
+                    "[*] Manual transport=" + when (runTransport()) {
+                        ManualRunTransport.App -> "app"
+                        ManualRunTransport.Shizuku -> "shell-shizuku"
+                        ManualRunTransport.LocalAdb -> "shell-local-adb"
+                    },
+                )
 
                 setPhase(InstallPhase.Downloading, app.getString(R.string.status_downloading_payload))
                 val payloads = repository.download(profile) { appendLog("[*] $it") }
@@ -195,11 +210,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                     DiagnosticUptime.waitUntil(minimumUptime)
                 }
 
-                setPhase(InstallPhase.Exploiting, app.getString(R.string.status_exploit_running))
-                executeExploit(payloads.exploit, profile.routePolicy)
-
-                setPhase(InstallPhase.LoadingKernelSu, app.getString(R.string.status_ksu_loading))
-                installKernelSu(payloads)
+                runExploitAndKernelSu(payloads)
 
                 if (payloads.source == PayloadSource.Online) {
                     runCatching { KnownGoodPayloadStore.publish(app, payloads) }
@@ -214,10 +225,6 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
 
                 setPhase(InstallPhase.Installed, app.getString(R.string.status_ksu_active))
                 appendLog(app.getString(R.string.log_install_complete))
-
-                // Persist a successful root result before any userspace restart.
-                // Keep the history entry active so post-root logs can still be
-                // appended until a scheduled Zygote restart kills this process.
                 checkpointHistorySuccess()
 
                 val restartZygote = AppPreferences.restartZygoteAfterRoot(app)
@@ -257,8 +264,6 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                             }
                         }
                     } catch (error: Throwable) {
-                        // Root is already verified. Post-root automation must never
-                        // convert that successful root into an install failure.
                         appendLog(
                             "[!] Post-root automation failed: " +
                                 (error.message ?: error.javaClass.simpleName),
@@ -272,32 +277,114 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 setPhase(InstallPhase.Failed, app.getString(R.string.status_install_failed))
                 finishHistory(InstallRunResult.Failed)
             } finally {
-                activeRunShizuku = null
+                activeLocalAdbSession = null
+                activeRunTransport = null
+            }
+        }
+    }
+
+    private suspend fun selectRunTransport(profile: TargetProfile): ManualRunTransport {
+        val requestedShizuku = AppPreferences.shizukuMode(app)
+        var shizukuUsable = false
+        if (requestedShizuku) {
+            appendLog(app.getString(R.string.log_shizuku_prepare))
+            val running = ShizukuController.isRunning() || ShizukuController.pingUntilRunning()
+            if (running) {
+                shizukuUsable = ShizukuController.isGranted() || ShizukuController.requestPermission()
+            }
+            if (shizukuUsable) {
+                appendLog(app.getString(R.string.log_shizuku_permission))
+            } else if (profile.routePolicy.prefersShellTransport) {
+                appendLog("[!] Shizuku is unavailable; using paired local ADB for this shell-required target")
+            }
+        }
+
+        return chooseManualRunTransport(
+            shellRequired = profile.routePolicy.prefersShellTransport,
+            shizukuRequested = requestedShizuku,
+            shizukuUsable = shizukuUsable,
+            localAdbPaired = AppPreferences.adbPaired(app),
+        ) ?: if (profile.routePolicy.prefersShellTransport) {
+            error("This target requires shell transport, but neither Shizuku nor the paired local ADB key is usable")
+        } else {
+            error(app.getString(R.string.error_shizuku_unavailable))
+        }
+    }
+
+    private suspend fun runExploitAndKernelSu(payloads: VerifiedPayloads) {
+        if (runTransport() != ManualRunTransport.LocalAdb) {
+            setPhase(InstallPhase.Exploiting, app.getString(R.string.status_exploit_running))
+            executeExploit(payloads.exploit, payloads.profile.routePolicy)
+            setPhase(InstallPhase.LoadingKernelSu, app.getString(R.string.status_ksu_loading))
+            installKernelSu(payloads)
+            return
+        }
+
+        TemporaryWirelessAdb.use(
+            context = app,
+            settleMillis = LOCAL_ADB_SETTLE_MILLIS,
+            onLog = ::appendLog,
+        ) {
+            WirelessAdbSession.open(
+                app,
+                portDiscoveryTimeoutMs = LOCAL_ADB_PORT_DISCOVERY_TIMEOUT_MILLIS,
+            ).use { session ->
+                val identity = session.shell("id")
+                require(
+                    identity.exitCode == 0 &&
+                        identity.output.contains("uid=2000") &&
+                        identity.output.contains("u:r:shell:s0"),
+                ) {
+                    "Local ADB did not provide the required u:r:shell:s0 context: " +
+                        identity.output.takeLast(240)
+                }
+                appendLog("[+] Manual Local ADB shell transport ready: u:r:shell:s0")
+                activeLocalAdbSession = session
+                try {
+                    setPhase(InstallPhase.Exploiting, app.getString(R.string.status_exploit_running))
+                    executeExploit(payloads.exploit, payloads.profile.routePolicy)
+                    setPhase(InstallPhase.LoadingKernelSu, app.getString(R.string.status_ksu_loading))
+                    installKernelSu(payloads)
+                } finally {
+                    activeLocalAdbSession = null
+                }
             }
         }
     }
 
     private suspend fun executeExploit(payload: File, policy: ExploitRoutePolicy) {
-        val shizuku = shizukuEnabled()
-        val transport = if (shizuku) {
-            ExploitRoutePolicy.SHELL_TRANSPORT
-        } else {
-            ExploitRoutePolicy.APP_TRANSPORT
+        val transport = runTransport()
+        val useShell = transport != ManualRunTransport.App
+        appendLog(
+            policy.describe(
+                if (useShell) ExploitRoutePolicy.SHELL_TRANSPORT else ExploitRoutePolicy.APP_TRANSPORT,
+            ),
+        )
+
+        val logPrefix = mutableState.value.log
+        val bootToken = currentBootToken()
+        if (transport == ManualRunTransport.LocalAdb) {
+            executeExploitViaLocalAdb(payload, policy, bootToken, logPrefix)
+            appendLog(app.getString(R.string.log_bootstrap_root))
+            return
         }
-        appendLog(policy.describe(transport))
-        val logFile = if (shizuku) File(SHIZUKU_LOG_PATH) else File(app.filesDir, "exploit.log")
-        if (shizuku) {
+
+        val logFile = if (transport == ManualRunTransport.Shizuku) {
+            File(SHIZUKU_LOG_PATH)
+        } else {
+            File(app.filesDir, "exploit.log")
+        }
+        if (transport == ManualRunTransport.Shizuku) {
             ShizukuController.exec(arrayOf("rm", "-f", SHIZUKU_LOG_PATH)).waitFor()
         } else {
             logFile.delete()
         }
+
         val helper = helperFile()
-        if (!shizuku) {
+        if (transport == ManualRunTransport.App) {
             require(helper.canExecute()) { app.getString(R.string.error_helper_unavailable) }
         }
-        val logPrefix = mutableState.value.log
-        val bootToken = currentBootToken()
-        val process = if (shizuku) {
+        val process = if (transport == ManualRunTransport.Shizuku) {
             val stagedPayload = shizukuStage(payload, SHIZUKU_PAYLOAD_PATH, "755")
             ShizukuController.exec(
                 arrayOf(
@@ -318,19 +405,14 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 helper.absolutePath,
                 logFile.absolutePath,
             ).redirectErrorStream(true)
-            processBuilder.environment().putAll(
-                policy.environment(cachedP0Offset(bootToken)),
-            )
+            processBuilder.environment().putAll(policy.environment(cachedP0Offset(bootToken)))
             processBuilder.start()
         }
+
         val captured = StringBuilder()
-        val readLog: () -> String = if (shizuku) {
-            { drainProcessOutput(process, captured) }
-        } else {
-            // Keep draining stdout while polling: if the helper fills the OS
-            // pipe buffer it blocks on write and stops making log progress,
-            // which would trip the stall detector spuriously.
-            { drainProcessOutput(process, captured); logFile.readTextIfPresent() }
+        fun readLog(): String {
+            drainProcessOutput(process, captured)
+            return if (transport == ManualRunTransport.Shizuku) captured.toString() else logFile.readTextIfPresent()
         }
 
         try {
@@ -352,15 +434,19 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 require(now - startedAt < EXPLOIT_TOTAL_MILLIS) {
                     app.getString(R.string.error_exploit_timeout)
                 }
-                delay(if (shizuku) SHIZUKU_LOG_POLL_INTERVAL else LOG_POLL_INTERVAL)
+                delay(
+                    if (transport == ManualRunTransport.Shizuku) {
+                        SHIZUKU_LOG_POLL_INTERVAL
+                    } else {
+                        LOG_POLL_INTERVAL
+                    },
+                )
             }
 
             val exitCode = process.waitFor()
             val rawLog = readLog()
             if (policy.p0OffsetCache) cacheP0Offset(bootToken, rawLog)
             publishExploitLog(logPrefix, rawLog)
-            // Both transports drain into `captured` during the poll loop, so
-            // this never blocks on a child still holding the pipe open.
             val earlyOutput = captured.toString().trim()
             require(exitCode == 0) {
                 app.getString(
@@ -380,6 +466,50 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             }
         }
         appendLog(app.getString(R.string.log_bootstrap_root))
+    }
+
+    private suspend fun executeExploitViaLocalAdb(
+        payload: File,
+        policy: ExploitRoutePolicy,
+        bootToken: String?,
+        logPrefix: String,
+    ) {
+        val session = requireNotNull(activeLocalAdbSession) {
+            "Manual Local ADB session disappeared before exploit launch"
+        }
+        session.remove(SHIZUKU_LOG_PATH)
+        session.push(nativeHelperFile(), SHIZUKU_HELPER_PATH, executable = true)
+        session.push(payload, SHIZUKU_PAYLOAD_PATH, executable = true)
+
+        val env = localAdbEnvironment(bootToken, SHIZUKU_HELPER_PATH, policy)
+        val command = buildString {
+            append("cd /data/local/tmp && ")
+            if (env.isNotBlank()) {
+                append(env)
+                append(' ')
+            }
+            append(shellQuote(SHIZUKU_HELPER_PATH))
+            append(" --run-payload ")
+            append(shellQuote(SHIZUKU_PAYLOAD_PATH))
+            append(' ')
+            append(shellQuote(SHIZUKU_HELPER_PATH))
+            append(' ')
+            append(shellQuote(SHIZUKU_LOG_PATH))
+        }
+        appendLog("[*] Launching Manual exploit through paired local ADB shell")
+        val streamed = session.runStreaming(
+            command = command,
+            overallTimeoutMs = EXPLOIT_TOTAL_MILLIS,
+            stallTimeoutMs = EXPLOIT_STALL_MILLIS,
+            onOutput = { snapshot -> publishExploitLog(logPrefix, snapshot) },
+        )
+        val remoteLog = session.readLog(SHIZUKU_LOG_PATH)
+        val rawLog = remoteLog.ifBlank { streamed }
+        publishExploitLog(logPrefix, rawLog)
+        if (policy.p0OffsetCache) cacheP0Offset(bootToken, rawLog)
+        require(rawLog.contains("exploit completed") && rawLog.contains("done=1 root=1")) {
+            app.getString(R.string.error_success_marker)
+        }
     }
 
     private fun drainProcessOutput(process: Process, buffer: StringBuilder): String {
@@ -414,20 +544,9 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         val bootToken = currentBootToken() ?: error(app.getString(R.string.error_boot_id))
         val autoLoaded = waitForAutoLateLoad(bootToken)
 
-        if (shizukuEnabled()) {
-            shizukuStage(payloads.kernelSu, SHIZUKU_KSUD_PATH, "755")
-            shizukuStage(payloads.kernelSu, SHIZUKU_KSUD_STAGE_PATH, "755")
-            appendLog(app.getString(R.string.log_ksu_staged))
-        } else {
-            val source = shellQuote(payloads.kernelSu.absolutePath)
-            val stageCommand =
-                "/system/bin/cp $source $SHIZUKU_KSUD_PATH && " +
-                    "/system/bin/cp $source $SHIZUKU_KSUD_STAGE_PATH && " +
-                    "/system/bin/chmod 755 $SHIZUKU_KSUD_PATH $SHIZUKU_KSUD_STAGE_PATH"
-            val stage = runHelper("-c", stageCommand)
-            require(stage.code == 0) { app.getString(R.string.error_ksu_stage, stage.output) }
-            appendLog(app.getString(R.string.log_ksu_staged))
-        }
+        val stage = runHelper("-c", kernelSuStageCommand(payloads))
+        require(stage.code == 0) { app.getString(R.string.error_ksu_stage, stage.output) }
+        appendLog(app.getString(R.string.log_ksu_staged))
 
         if (autoLoaded) {
             appendLog("[+] KernelSU auto-late-load verified; skipped duplicate late-load")
@@ -439,17 +558,30 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             if (lateLoad.output.isNotBlank()) appendLog(lateLoad.output)
         }
 
-        val verification = runHelper("--ksu-info")
-        require(verification.code == 0 || NativeProbe.isKernelSuActive()) {
-            app.getString(R.string.error_ksu_verify, verification.code, verification.output)
+        val verification = runCatching { runHelper("--ksu-info") }.getOrNull()
+        val nativeActive = NativeProbe.isKernelSuActive()
+        val rootProof = if (verification?.code == 0 || nativeActive) {
+            null
+        } else {
+            runCatching { runPostRoot("id") }.getOrNull()
         }
-        if (verification.code == 0 && verification.output.isNotBlank()) appendLog(verification.output)
-
-        val global = KernelSuGlobalReadiness.probe(app, bootToken)
-        require(global.exitCode == 0) {
+        require(
+            verification?.code == 0 || nativeActive ||
+                (rootProof?.code == 0 && rootProof.output.contains("uid=0")),
+        ) {
             app.getString(
                 R.string.error_ksu_verify,
-                global.exitCode,
+                verification?.code ?: rootProof?.code ?: -1,
+                verification?.output ?: rootProof?.output ?: "KernelSU control channel is not active",
+            )
+        }
+        if (verification?.code == 0 && verification.output.isNotBlank()) appendLog(verification.output)
+
+        val global = runPostRoot(KernelSuGlobalReadiness.command(bootToken))
+        require(global.code == 0) {
+            app.getString(
+                R.string.error_ksu_verify,
+                global.code,
                 global.output.ifBlank { "KernelSU late-load global readiness is not satisfied" },
             )
         }
@@ -463,12 +595,22 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         var lastOutput = ""
         while (SystemClock.elapsedRealtime() < deadline) {
             val probe = runCatching { runHelper("--ksu-info") }.getOrNull()
-            val controlActive = probe?.code == 0 || NativeProbe.isKernelSuActive()
+            val nativeActive = NativeProbe.isKernelSuActive()
+            var controlActive = probe?.code == 0 || nativeActive
+            if (!controlActive) {
+                val rootProof = runCatching { runPostRoot("id") }.getOrNull()
+                if (rootProof != null) {
+                    if (rootProof.output.isNotBlank()) lastOutput = rootProof.output
+                    controlActive = rootProof.code == 0 && rootProof.output.contains("uid=0")
+                }
+            }
             if (controlActive) {
-                val global = runCatching { KernelSuGlobalReadiness.probe(app, bootToken) }.getOrNull()
+                val global = runCatching {
+                    runPostRoot(KernelSuGlobalReadiness.command(bootToken))
+                }.getOrNull()
                 if (global != null) {
                     lastOutput = global.output
-                    if (global.exitCode == 0) {
+                    if (global.code == 0) {
                         if (probe?.code == 0 && probe.output.isNotBlank()) appendLog(probe.output)
                         if (global.output.isNotBlank()) appendLog(global.output)
                         return true
@@ -483,6 +625,35 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             appendLog("[*] auto-late-load readiness probe: ${lastOutput.takeLast(320)}")
         }
         return false
+    }
+
+    private fun kernelSuStageCommand(payloads: VerifiedPayloads): String {
+        val source = shellQuote(payloads.kernelSu.absolutePath)
+        return "set -e; " +
+            "tmp='$KSUD_REFRESH_PATH'; rm -f \"\$tmp\"; " +
+            "/system/bin/cp $source \"\$tmp\"; /system/bin/chmod 755 \"\$tmp\"; " +
+            "/system/bin/mv -f \"\$tmp\" $SHIZUKU_KSUD_PATH; " +
+            "tmp='$KSUD_STAGE_REFRESH_PATH'; rm -f \"\$tmp\"; " +
+            "/system/bin/cp $source \"\$tmp\"; /system/bin/chmod 755 \"\$tmp\"; " +
+            "/system/bin/mv -f \"\$tmp\" $SHIZUKU_KSUD_STAGE_PATH"
+    }
+
+    private fun runPostRoot(command: String): CommandResult = when (runTransport()) {
+        ManualRunTransport.Shizuku -> {
+            val result = ShizukuController.shell("su -c ${shellQuote(command)}")
+            CommandResult(result.exitCode, stripAnsi(result.output.trim()))
+        }
+        ManualRunTransport.LocalAdb -> {
+            val session = requireNotNull(activeLocalAdbSession) {
+                "Manual Local ADB session disappeared during KernelSU handoff"
+            }
+            val result = session.shell("su -c ${shellQuote(command)} 2>&1")
+            CommandResult(result.exitCode, stripAnsi(result.output.trim()))
+        }
+        ManualRunTransport.App -> {
+            val result = RootHelperShell.shell(app, command)
+            CommandResult(result.exitCode, stripAnsi(result.output.trim()))
+        }
     }
 
     private fun detectInstalled(): Boolean {
@@ -539,16 +710,20 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             .apply()
     }
 
-    private fun helperFile(): File =
-        if (shizukuEnabled()) {
-            shizukuStage(nativeHelperFile(), SHIZUKU_HELPER_PATH, "755")
-        } else {
-            nativeHelperFile()
-        }
+    private fun helperFile(): File = when (runTransport()) {
+        ManualRunTransport.Shizuku -> shizukuStage(nativeHelperFile(), SHIZUKU_HELPER_PATH, "755")
+        ManualRunTransport.LocalAdb -> File(SHIZUKU_HELPER_PATH)
+        ManualRunTransport.App -> nativeHelperFile()
+    }
 
     private fun nativeHelperFile() = File(app.applicationInfo.nativeLibraryDir, "libcve43499root.so")
 
-    private fun shizukuEnabled(): Boolean = activeRunShizuku ?: AppPreferences.shizukuMode(app)
+    private fun runTransport(): ManualRunTransport =
+        activeRunTransport ?: if (AppPreferences.shizukuMode(app)) {
+            ManualRunTransport.Shizuku
+        } else {
+            ManualRunTransport.App
+        }
 
     private fun shizukuStage(source: File, target: String, mode: String): File {
         val staged = File(target)
@@ -575,6 +750,17 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         }
     }.toTypedArray()
 
+    private fun localAdbEnvironment(
+        bootToken: String?,
+        helperPath: String,
+        policy: ExploitRoutePolicy,
+    ): String = buildList {
+        add("CVE43499_ROOT_HELPER=${shellQuote(helperPath)}")
+        policy.environment(cachedP0Offset(bootToken)).forEach { (key, value) ->
+            add("$key=${shellQuote(value)}")
+        }
+    }.joinToString(" ")
+
     /**
      * Runs the bootstrap helper for a short management command. Unlike the
      * exploit run there is no log file to poll, so output is drained inline
@@ -583,8 +769,23 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
      * indefinitely.
      */
     private suspend fun runHelper(vararg arguments: String): CommandResult {
+        if (runTransport() == ManualRunTransport.LocalAdb) {
+            val session = requireNotNull(activeLocalAdbSession) {
+                "Manual Local ADB session disappeared during bootstrap handoff"
+            }
+            val command = buildString {
+                append(shellQuote(SHIZUKU_HELPER_PATH))
+                arguments.forEach { argument ->
+                    append(' ')
+                    append(shellQuote(argument))
+                }
+            }
+            val result = session.shell("$command 2>&1")
+            return CommandResult(result.exitCode, stripAnsi(result.output.trim()))
+        }
+
         val helper = helperFile()
-        val process = if (shizukuEnabled()) {
+        val process = if (runTransport() == ManualRunTransport.Shizuku) {
             ShizukuController.exec(arrayOf(helper.absolutePath) + arguments)
         } else {
             ProcessBuilder(listOf(helper.absolutePath) + arguments)
@@ -699,6 +900,10 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         private const val SHIZUKU_PAYLOAD_PATH = "/data/local/tmp/ksu-payload"
         private const val SHIZUKU_KSUD_PATH = "/data/local/tmp/ksud-s25u-kdp"
         private const val SHIZUKU_KSUD_STAGE_PATH = "/data/local/tmp/.ksud-stage"
+        private const val KSUD_REFRESH_PATH = "/data/local/tmp/.ksud-refresh"
+        private const val KSUD_STAGE_REFRESH_PATH = "/data/local/tmp/.ksud-stage-refresh"
+        private const val LOCAL_ADB_SETTLE_MILLIS = 800L
+        private const val LOCAL_ADB_PORT_DISCOVERY_TIMEOUT_MILLIS = 30_000L
         private val LOG_POLL_INTERVAL = 250.milliseconds
         private val HELPER_POLL_INTERVAL = 250.milliseconds
         private val AUTO_LATE_LOAD_POLL_INTERVAL = 400.milliseconds
