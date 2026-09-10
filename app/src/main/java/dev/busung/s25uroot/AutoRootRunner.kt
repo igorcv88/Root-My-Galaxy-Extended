@@ -15,13 +15,19 @@ internal enum class AutoRootStage {
     VerifyingRoot,
 }
 
+internal enum class AutoRootShellTransport {
+    Shizuku,
+    LocalAdb,
+}
+
 private data class AutoRootCommandResult(val code: Int, val output: String)
 
 /**
  * Auto Root executes the exact last-known-good offline payload from a fresh
- * executor. Legacy targets use the app transport; a target whose route policy
- * prefers shell is fail-closed onto Shizuku shell so tracefs is never silently
- * attempted from an untrusted-app SELinux domain.
+ * executor. Legacy targets use the app transport. A target whose route policy
+ * prefers shell is fail-closed onto a real `u:r:shell:s0` transport: Shizuku
+ * when its client Binder is usable, otherwise the already-paired local Wireless
+ * ADB transport. It never degrades a shell-required target to untrusted-app/P0.
  *
  * KernelSU is expected to auto-late-load from the UMH root helper as soon as
  * bootstrap root lands. The historical client stage/--late-load path remains a
@@ -32,27 +38,43 @@ internal class AutoRootRunner(
     private val onStage: (AutoRootStage) -> Unit,
     private val onLog: (String) -> Unit = {},
 ) {
-    suspend fun run(payloads: VerifiedPayloads, bootToken: String) {
+    suspend fun run(
+        payloads: VerifiedPayloads,
+        bootToken: String,
+        shellTransport: AutoRootShellTransport? = null,
+        beforeExploit: () -> Unit = {},
+    ) {
         require(payloads.source == PayloadSource.Offline) {
             "Auto Root requires the last-known-good offline payload"
         }
 
-        val useShellTransport = payloads.profile.routePolicy.prefersShellTransport
-        val transport = if (useShellTransport) {
-            ExploitRoutePolicy.SHELL_TRANSPORT
+        val shellRequired = payloads.profile.routePolicy.prefersShellTransport
+        if (shellRequired) {
+            requireNotNull(shellTransport) {
+                "Shell-required Auto Root has no usable shell transport"
+            }
         } else {
-            ExploitRoutePolicy.APP_TRANSPORT
+            require(shellTransport == null) {
+                "Legacy Auto Root must not be forced through a shell transport"
+            }
+        }
+
+        val transportLabel = when (shellTransport) {
+            AutoRootShellTransport.Shizuku -> "shell-shizuku"
+            AutoRootShellTransport.LocalAdb -> "shell-local-adb"
+            null -> ExploitRoutePolicy.APP_TRANSPORT
         }
 
         onStage(AutoRootStage.PreparingExploit)
-        onLog("[*] profile=${payloads.profile.profileId} transport=$transport source=offline")
+        onLog("[*] profile=${payloads.profile.profileId} transport=$transportLabel source=offline")
 
         onStage(AutoRootStage.RunningExploit)
         executeExploit(
-            payloads.exploit,
-            bootToken,
-            payloads.profile.routePolicy,
-            useShellTransport,
+            payload = payloads.exploit,
+            bootToken = bootToken,
+            policy = payloads.profile.routePolicy,
+            shellTransport = shellTransport,
+            beforeExploit = beforeExploit,
         )
 
         onStage(AutoRootStage.LoadingKernelSu)
@@ -148,14 +170,19 @@ internal class AutoRootRunner(
         payload: File,
         bootToken: String,
         policy: ExploitRoutePolicy,
-        useShellTransport: Boolean,
+        shellTransport: AutoRootShellTransport?,
+        beforeExploit: () -> Unit,
     ) {
-        val transport = if (useShellTransport) {
-            ExploitRoutePolicy.SHELL_TRANSPORT
-        } else {
-            ExploitRoutePolicy.APP_TRANSPORT
-        }
-        onLog(policy.describe(transport))
+        val useShellTransport = shellTransport != null
+        onLog(
+            policy.describe(
+                if (useShellTransport) {
+                    ExploitRoutePolicy.SHELL_TRANSPORT
+                } else {
+                    ExploitRoutePolicy.APP_TRANSPORT
+                },
+            ),
+        )
 
         val localLogFile = File(context.filesDir, "autoroot-exploit.log")
         if (!useShellTransport) localLogFile.delete()
@@ -167,15 +194,32 @@ internal class AutoRootRunner(
             Process.getThreadPriority(Process.myTid())
         }.getOrDefault(Process.THREAD_PRIORITY_DEFAULT)
 
+        if (shellTransport == AutoRootShellTransport.LocalAdb) {
+            runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
+            try {
+                executeExploitViaLocalAdb(
+                    payload = payload,
+                    localHelper = localHelper,
+                    bootToken = bootToken,
+                    policy = policy,
+                    beforeExploit = beforeExploit,
+                )
+            } finally {
+                runCatching { Process.setThreadPriority(originalThreadPriority) }
+            }
+            onLog(context.getString(R.string.log_bootstrap_root))
+            return
+        }
+
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
         val process = try {
-            val launched = if (useShellTransport) {
+            val launched = if (shellTransport == AutoRootShellTransport.Shizuku) {
                 require(ShizukuController.isGranted()) {
                     "Shizuku shell transport is not authorized"
                 }
 
                 val cleanup = ShizukuController.exec(
-                    arrayOf("rm", "-f", SHIZUKU_LOG_PATH),
+                    arrayOf("rm", "-f", SHELL_LOG_PATH),
                 )
                 try {
                     require(cleanup.waitFor() == 0) {
@@ -185,20 +229,22 @@ internal class AutoRootRunner(
                     if (cleanup.isAlive) cleanup.destroy()
                 }
 
-                val stagedHelper = shizukuStage(localHelper, SHIZUKU_HELPER_PATH)
-                val stagedPayload = shizukuStage(payload, SHIZUKU_PAYLOAD_PATH)
+                val stagedHelper = shizukuStage(localHelper, SHELL_HELPER_PATH)
+                val stagedPayload = shizukuStage(payload, SHELL_PAYLOAD_PATH)
+                beforeExploit()
                 ShizukuController.exec(
                     arrayOf(
                         stagedHelper.absolutePath,
                         "--run-payload",
                         stagedPayload.absolutePath,
                         stagedHelper.absolutePath,
-                        SHIZUKU_LOG_PATH,
+                        SHELL_LOG_PATH,
                     ),
                     shizukuEnvironment(bootToken, stagedHelper.absolutePath, policy),
                     "/data/local/tmp",
                 )
             } else {
+                beforeExploit()
                 val processBuilder = ProcessBuilder(
                     localHelper.absolutePath,
                     "--run-payload",
@@ -255,7 +301,7 @@ internal class AutoRootRunner(
                 }
                 delay(
                     if (useShellTransport) {
-                        SHIZUKU_LOG_POLL_INTERVAL
+                        SHELL_LOG_POLL_INTERVAL
                     } else {
                         LOG_POLL_INTERVAL
                     },
@@ -289,6 +335,84 @@ internal class AutoRootRunner(
         onLog(context.getString(R.string.log_bootstrap_root))
     }
 
+    private suspend fun executeExploitViaLocalAdb(
+        payload: File,
+        localHelper: File,
+        bootToken: String,
+        policy: ExploitRoutePolicy,
+        beforeExploit: () -> Unit,
+    ) {
+        require(AppPreferences.adbPaired(context)) {
+            "Shell-required Auto Root needs either an authorized Shizuku Binder or the paired local ADB key"
+        }
+
+        TemporaryWirelessAdb.use(
+            context = context,
+            settleMillis = LOCAL_ADB_SETTLE_MILLIS,
+            onLog = onLog,
+        ) {
+            WirelessAdbSession.open(
+                context,
+                portDiscoveryTimeoutMs = LOCAL_ADB_PORT_DISCOVERY_TIMEOUT_MILLIS,
+            ).use { session ->
+                val identity = session.shell("id")
+                require(
+                    identity.exitCode == 0 &&
+                        identity.output.contains("uid=2000") &&
+                        identity.output.contains("u:r:shell:s0"),
+                ) {
+                    "Local ADB did not provide the required u:r:shell:s0 context: " +
+                        identity.output.takeLast(240)
+                }
+                onLog("[+] Local ADB shell transport ready: u:r:shell:s0")
+
+                session.remove(SHELL_LOG_PATH)
+                session.push(localHelper, SHELL_HELPER_PATH, executable = true)
+                session.push(payload, SHELL_PAYLOAD_PATH, executable = true)
+
+                val env = localAdbEnvironment(
+                    bootToken = bootToken,
+                    helperPath = SHELL_HELPER_PATH,
+                    policy = policy,
+                )
+                val command = buildString {
+                    append("cd /data/local/tmp && ")
+                    if (env.isNotBlank()) {
+                        append(env)
+                        append(' ')
+                    }
+                    append(shellQuote(SHELL_HELPER_PATH))
+                    append(" --run-payload ")
+                    append(shellQuote(SHELL_PAYLOAD_PATH))
+                    append(' ')
+                    append(shellQuote(SHELL_HELPER_PATH))
+                    append(' ')
+                    append(shellQuote(SHELL_LOG_PATH))
+                }
+
+                // Claim the once-per-boot attempt only after a real shell transport
+                // exists and both exact offline artifacts have been staged.
+                beforeExploit()
+                onLog("[*] Launching exploit through paired local ADB shell")
+
+                val streamed = session.runStreaming(
+                    command = command,
+                    overallTimeoutMs = EXPLOIT_TOTAL_MILLIS,
+                    stallTimeoutMs = EXPLOIT_STALL_MILLIS,
+                    onOutput = { snapshot -> publishExploitLog(snapshot) },
+                )
+                val remoteLog = session.readLog(SHELL_LOG_PATH)
+                val rawLog = remoteLog.ifBlank { streamed }
+                publishExploitLog(rawLog)
+                if (policy.p0OffsetCache) cacheP0Offset(bootToken, rawLog)
+
+                require(rawLog.contains("exploit completed") && rawLog.contains("done=1 root=1")) {
+                    context.getString(R.string.error_success_marker)
+                }
+            }
+        }
+    }
+
     private fun shizukuStage(source: File, target: String): File {
         try {
             ShizukuController.writeFile(target, "755", source.inputStream())
@@ -311,6 +435,17 @@ internal class AutoRootRunner(
             add("$key=$value")
         }
     }.toTypedArray()
+
+    private fun localAdbEnvironment(
+        bootToken: String,
+        helperPath: String,
+        policy: ExploitRoutePolicy,
+    ): String = buildList {
+        add("CVE43499_ROOT_HELPER=${shellQuote(helperPath)}")
+        policy.environment(cachedP0Offset(bootToken)).forEach { (key, value) ->
+            add("$key=${shellQuote(value)}")
+        }
+    }.joinToString(" ")
 
     private suspend fun stageKernelSuRequired(payloads: VerifiedPayloads) {
         val stage = stageKernelSuAtomically(payloads)
@@ -416,6 +551,8 @@ internal class AutoRootRunner(
         private const val EXPLOIT_TOTAL_MILLIS = 900_000L
         private const val HELPER_TIMEOUT_MILLIS = 120_000L
         private const val AUTO_LATE_LOAD_WAIT_MILLIS = 8_000L
+        private const val LOCAL_ADB_SETTLE_MILLIS = 800L
+        private const val LOCAL_ADB_PORT_DISCOVERY_TIMEOUT_MILLIS = 30_000L
         private const val P0_CACHE = "p0_cache"
         private const val P0_CACHE_BOOT_TOKEN = "kernel_boot_id"
         private const val P0_CACHE_OFFSET = "offset"
@@ -425,11 +562,11 @@ internal class AutoRootRunner(
         private const val KSUD_STAGE_PATH = "/data/local/tmp/.ksud-stage"
         private const val KSUD_REFRESH_PATH = "/data/local/tmp/.ksud-refresh"
         private const val KSUD_STAGE_REFRESH_PATH = "/data/local/tmp/.ksud-stage-refresh"
-        private const val SHIZUKU_LOG_PATH = "/data/local/tmp/autoroot-exploit.log"
-        private const val SHIZUKU_HELPER_PATH = "/data/local/tmp/autoroot-helper"
-        private const val SHIZUKU_PAYLOAD_PATH = "/data/local/tmp/autoroot-payload"
+        private const val SHELL_LOG_PATH = "/data/local/tmp/autoroot-exploit.log"
+        private const val SHELL_HELPER_PATH = "/data/local/tmp/autoroot-helper"
+        private const val SHELL_PAYLOAD_PATH = "/data/local/tmp/autoroot-payload"
         private val LOG_POLL_INTERVAL = 250.milliseconds
-        private val SHIZUKU_LOG_POLL_INTERVAL = 1_000.milliseconds
+        private val SHELL_LOG_POLL_INTERVAL = 1_000.milliseconds
         private val HELPER_POLL_INTERVAL = 250.milliseconds
         private val AUTO_LATE_LOAD_POLL_INTERVAL = 400.milliseconds
         private val ANSI_ESCAPE = Regex("\u001B\\[[0-?]*[ -/]*[@-~]")
