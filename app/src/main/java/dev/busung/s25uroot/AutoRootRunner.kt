@@ -78,36 +78,38 @@ internal class AutoRootRunner(
         )
 
         onStage(AutoRootStage.LoadingKernelSu)
-        val autoLoaded = waitForAutoLateLoad(bootToken)
+        withKernelSuClient(shellTransport) { ksuExec ->
+            val autoLoaded = waitForAutoLateLoad(bootToken, ksuExec)
 
-        if (autoLoaded) {
-            // Kernel control plus the boot-scoped global readiness invariant prove
-            // that blocking late-load/mount stages finished in PID1's namespace.
-            // Only now is it safe to persist success and start post-root work.
-            onLog("[+] KernelSU auto-late-load globally verified; skipped duplicate late-load")
-            onStage(AutoRootStage.VerifyingRoot)
-            verifyKernelSu(bootToken)
-            return
+            if (autoLoaded) {
+                // Keep the same authenticated client principal that acquired root.
+                // A shell-launched v0266 daemon authorizes uid 2000, while legacy
+                // standalone boots authorize the app client. Switching principals
+                // here makes a healthy auto-late-load look unavailable.
+                onLog("[+] KernelSU auto-late-load globally verified; skipped duplicate late-load")
+                onStage(AutoRootStage.VerifyingRoot)
+                verifyKernelSu(bootToken, ksuExec)
+            } else {
+                onLog("[!] KernelSU auto-late-load not globally ready; using same-transport client fallback")
+                logKernelSuAutoStage(ksuExec)
+                stageKernelSuRequired(payloads, ksuExec)
+                val lateLoad = ksuExec(arrayOf("--late-load"))
+                require(lateLoad.code == 0) {
+                    context.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
+                }
+                if (lateLoad.output.isNotBlank()) onLog(lateLoad.output)
+
+                onStage(AutoRootStage.VerifyingRoot)
+                verifyKernelSu(bootToken, ksuExec)
+            }
         }
-
-        // Auto-late-load did not cross the global readiness boundary. Refresh the
-        // staged ksud and use the historical client fallback. The patched ksud
-        // serializes concurrent late-load callers and suppresses same-boot stage
-        // replay, so this fallback cannot race a still-finishing UMH caller.
-        onLog("[!] KernelSU auto-late-load not globally ready; using serialized client fallback")
-        stageKernelSuRequired(payloads)
-        val lateLoad = runHelper("--late-load")
-        require(lateLoad.code == 0) {
-            context.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
-        }
-        if (lateLoad.output.isNotBlank()) onLog(lateLoad.output)
-
-        onStage(AutoRootStage.VerifyingRoot)
-        verifyKernelSu(bootToken)
     }
 
-    private suspend fun verifyKernelSu(bootToken: String) {
-        val verification = runCatching { runHelper("--ksu-info") }.getOrNull()
+    private suspend fun verifyKernelSu(
+        bootToken: String,
+        ksuExec: suspend (Array<out String>) -> AutoRootCommandResult,
+    ) {
+        val verification = runCatching { ksuExec(arrayOf("--ksu-info")) }.getOrNull()
         val nativeActive = NativeProbe.isKernelSuActive()
         require(verification?.code == 0 || nativeActive) {
             context.getString(
@@ -120,11 +122,11 @@ internal class AutoRootRunner(
             onLog(verification.output)
         }
 
-        val global = KernelSuGlobalReadiness.probe(context, bootToken)
-        require(global.exitCode == 0) {
+        val global = ksuExec(arrayOf("-c", KernelSuGlobalReadiness.command(bootToken)))
+        require(global.code == 0) {
             context.getString(
                 R.string.error_ksu_verify,
-                global.exitCode,
+                global.code,
                 global.output.ifBlank { "KernelSU late-load global readiness is not satisfied" },
             )
         }
@@ -132,19 +134,22 @@ internal class AutoRootRunner(
         onLog("[+] KernelSU control and PID1 mount readiness verified")
     }
 
-    private suspend fun waitForAutoLateLoad(bootToken: String): Boolean {
+    private suspend fun waitForAutoLateLoad(
+        bootToken: String,
+        ksuExec: suspend (Array<out String>) -> AutoRootCommandResult,
+    ): Boolean {
         val deadline = SystemClock.elapsedRealtime() + AUTO_LATE_LOAD_WAIT_MILLIS
         var lastOutput = ""
         while (SystemClock.elapsedRealtime() < deadline) {
-            val probe = runCatching { runHelper("--ksu-info") }.getOrNull()
+            val probe = runCatching { ksuExec(arrayOf("--ksu-info")) }.getOrNull()
             val controlActive = probe?.code == 0 || NativeProbe.isKernelSuActive()
             if (controlActive) {
                 val global = runCatching {
-                    KernelSuGlobalReadiness.probe(context, bootToken)
+                    ksuExec(arrayOf("-c", KernelSuGlobalReadiness.command(bootToken)))
                 }.getOrNull()
                 if (global != null) {
                     lastOutput = global.output
-                    if (global.exitCode == 0) {
+                    if (global.code == 0) {
                         if (probe?.code == 0 && probe.output.isNotBlank()) onLog(probe.output)
                         if (global.output.isNotBlank()) onLog(global.output)
                         return true
@@ -161,9 +166,9 @@ internal class AutoRootRunner(
 
         if (!NativeProbe.isKernelSuActive()) return false
         val finalGlobal = runCatching {
-            KernelSuGlobalReadiness.probe(context, bootToken)
+            ksuExec(arrayOf("-c", KernelSuGlobalReadiness.command(bootToken)))
         }.getOrNull()
-        return finalGlobal?.exitCode == 0
+        return finalGlobal?.code == 0
     }
 
     private suspend fun executeExploit(
@@ -447,23 +452,83 @@ internal class AutoRootRunner(
         }
     }.joinToString(" ")
 
-    private suspend fun stageKernelSuRequired(payloads: VerifiedPayloads) {
-        val stage = stageKernelSuAtomically(payloads)
+    private suspend fun <T> withKernelSuClient(
+        shellTransport: AutoRootShellTransport?,
+        block: suspend (suspend (Array<out String>) -> AutoRootCommandResult) -> T,
+    ): T = when (shellTransport) {
+        AutoRootShellTransport.Shizuku -> {
+            require(ShizukuController.isGranted()) {
+                "Shizuku shell transport disappeared before KernelSU handoff"
+            }
+            onLog("[*] KernelSU handoff client=shizuku-shell uid=2000")
+            block { arguments -> runShizukuHelper(*arguments) }
+        }
+        AutoRootShellTransport.LocalAdb -> {
+            TemporaryWirelessAdb.use(
+                context = context,
+                settleMillis = LOCAL_ADB_SETTLE_MILLIS,
+                onLog = onLog,
+            ) {
+                WirelessAdbSession.open(
+                    context,
+                    portDiscoveryTimeoutMs = LOCAL_ADB_PORT_DISCOVERY_TIMEOUT_MILLIS,
+                ).use { session ->
+                    val identity = session.shell("id")
+                    require(
+                        identity.exitCode == 0 &&
+                            identity.output.contains("uid=2000") &&
+                            identity.output.contains("u:r:shell:s0"),
+                    ) {
+                        "KernelSU handoff local ADB lost u:r:shell:s0: " + identity.output.takeLast(240)
+                    }
+                    onLog("[*] KernelSU handoff client=local-adb-shell uid=2000")
+                    block { arguments -> runLocalAdbHelper(session, *arguments) }
+                }
+            }
+        }
+        null -> {
+            onLog("[*] KernelSU handoff client=standalone-app")
+            block { arguments -> runHelper(*arguments) }
+        }
+    }
+
+    private suspend fun stageKernelSuRequired(
+        payloads: VerifiedPayloads,
+        ksuExec: suspend (Array<out String>) -> AutoRootCommandResult,
+    ) {
+        val stage = ksuExec(arrayOf("-c", kernelSuStageCommand(payloads)))
         require(stage.code == 0) { context.getString(R.string.error_ksu_stage, stage.output) }
         onLog(context.getString(R.string.log_ksu_staged))
     }
 
-    private suspend fun stageKernelSuAtomically(payloads: VerifiedPayloads): AutoRootCommandResult {
+    private fun kernelSuStageCommand(payloads: VerifiedPayloads): String {
+        // The client only transports this string. The authenticated uid-0 daemon
+        // executes it, so the verified app-private source remains readable even
+        // when the client itself is shell uid 2000.
         val source = shellQuote(payloads.kernelSu.absolutePath)
-        val stageCommand =
-            "set -e; " +
-                "tmp='$KSUD_REFRESH_PATH'; rm -f \"\$tmp\"; " +
-                "/system/bin/cp $source \"\$tmp\"; /system/bin/chmod 755 \"\$tmp\"; " +
-                "/system/bin/mv -f \"\$tmp\" $KSUD_PATH; " +
-                "tmp='$KSUD_STAGE_REFRESH_PATH'; rm -f \"\$tmp\"; " +
-                "/system/bin/cp $source \"\$tmp\"; /system/bin/chmod 755 \"\$tmp\"; " +
-                "/system/bin/mv -f \"\$tmp\" $KSUD_STAGE_PATH"
-        return runHelper("-c", stageCommand)
+        return "set -e; " +
+            "tmp='$KSUD_REFRESH_PATH'; rm -f \"\$tmp\"; " +
+            "/system/bin/cp $source \"\$tmp\"; /system/bin/chmod 755 \"\$tmp\"; " +
+            "/system/bin/mv -f \"\$tmp\" $KSUD_PATH; " +
+            "tmp='$KSUD_STAGE_REFRESH_PATH'; rm -f \"\$tmp\"; " +
+            "/system/bin/cp $source \"\$tmp\"; /system/bin/chmod 755 \"\$tmp\"; " +
+            "/system/bin/mv -f \"\$tmp\" $KSUD_STAGE_PATH"
+    }
+
+    private suspend fun logKernelSuAutoStage(
+        ksuExec: suspend (Array<out String>) -> AutoRootCommandResult,
+    ) {
+        val diagnostic = runCatching {
+            ksuExec(
+                arrayOf(
+                    "-c",
+                    "cat /data/local/tmp/ksu_auto_stage.log 2>/dev/null || true",
+                ),
+            )
+        }.getOrNull()
+        if (diagnostic != null && diagnostic.output.isNotBlank()) {
+            onLog("[*] KernelSU UMH stage log: ${diagnostic.output.takeLast(640)}")
+        }
     }
 
     private fun helperFile() =
@@ -473,6 +538,33 @@ internal class AutoRootRunner(
         val process = ProcessBuilder(listOf(helperFile().absolutePath) + arguments)
             .redirectErrorStream(true)
             .start()
+        return awaitHelperProcess(process)
+    }
+
+    private suspend fun runShizukuHelper(vararg arguments: String): AutoRootCommandResult {
+        val process = ShizukuController.exec(
+            arrayOf(SHELL_HELPER_PATH, *arguments),
+            dir = "/data/local/tmp",
+        )
+        return awaitHelperProcess(process)
+    }
+
+    private fun runLocalAdbHelper(
+        session: WirelessAdbSession,
+        vararg arguments: String,
+    ): AutoRootCommandResult {
+        val command = buildString {
+            append(shellQuote(SHELL_HELPER_PATH))
+            arguments.forEach { argument ->
+                append(' ')
+                append(shellQuote(argument))
+            }
+        }
+        val result = session.shell(command)
+        return AutoRootCommandResult(result.exitCode, stripAnsi(result.output.trim()))
+    }
+
+    private suspend fun awaitHelperProcess(process: java.lang.Process): AutoRootCommandResult {
         val captured = StringBuilder()
         val startedAt = SystemClock.elapsedRealtime()
         try {

@@ -105,6 +105,20 @@ class AutoRootShellTransportContractTest {
     }
 
     @Test
+    fun kernelSuHandoffKeepsRootDaemonClientIdentity() {
+        val runner = source("AutoRootRunner.kt")
+        assertTrue(runner.contains("withKernelSuClient(shellTransport)"))
+        assertTrue(runner.contains("KernelSU handoff client=shizuku-shell uid=2000"))
+        assertTrue(runner.contains("runShizukuHelper(*arguments)"))
+        assertTrue(runner.contains("KernelSU handoff client=local-adb-shell uid=2000"))
+        assertTrue(runner.contains("runLocalAdbHelper(session, *arguments)"))
+        assertTrue(runner.contains("KernelSU handoff client=standalone-app"))
+        assertTrue(runner.contains("""ksuExec(arrayOf("--late-load"))"""))
+        assertTrue(runner.contains("KernelSuGlobalReadiness.command(bootToken)"))
+        assertFalse(runner.contains("KernelSuGlobalReadiness.probe(context, bootToken)"))
+    }
+
+    @Test
     fun shizukuBootDoesNotYieldToItsAutoRootConsumer() {
         val service = source("ShizukuBootService.kt")
         assertTrue(service.contains("autoRootPriority || autoRootRequiresShellTransport()"))

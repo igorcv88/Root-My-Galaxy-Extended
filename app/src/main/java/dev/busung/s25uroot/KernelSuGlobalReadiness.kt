@@ -10,10 +10,12 @@ import android.content.Context
  * be visible in /proc/1/mountinfo.
  */
 internal object KernelSuGlobalReadiness {
-    fun probe(context: Context, bootToken: String): LocalAdbClient.ShellResult {
+    fun probe(context: Context, bootToken: String): LocalAdbClient.ShellResult =
+        RootHelperShell.shell(context, command(bootToken))
+
+    internal fun command(bootToken: String): String {
         val boot = shellQuote(bootToken)
-        val command =
-            "boot=$boot; " +
+        return "boot=$boot; " +
                 "marker='$READY_MARKER'; " +
                 "init=\$(readlink /proc/1/ns/mnt 2>/dev/null) || exit 70; " +
                 "self=\$(readlink /proc/self/ns/mnt 2>/dev/null || true); " +
@@ -29,7 +31,6 @@ internal object KernelSuGlobalReadiness {
                 "echo 'metamodule mount verified in PID1 mountinfo'; " +
                 "fi; " +
                 "cat \"\$marker\""
-        return RootHelperShell.shell(context, command)
     }
 
     private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
