@@ -34,9 +34,10 @@ internal const val AUTO_ROOT_CHANNEL_ID = "auto_root_postboot"
  * Foreground boot gate for Auto Root.
  *
  * BOOT_COMPLETED is the Android-readiness signal. The gate owns the foreground
- * lifecycle and minimum-uptime wait. The exploit still runs in a fresh
- * :autoroot_exec process, but execution now starts only after that process has
- * actually connected and accepted an explicit Messenger command.
+ * lifecycle and minimum-uptime wait. Standalone targets still execute through a
+ * fresh :autoroot_exec process. Targets that require shell are dispatched to the
+ * default/provider process so they use the authoritative Shizuku Binder there;
+ * the exploit itself still runs remotely with shell identity.
  */
 class AutoRootService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -215,27 +216,36 @@ class AutoRootService : Service() {
 
             updateNotification(getString(R.string.autoroot_checking_firmware))
 
-            // Do not consume the once-per-boot exploit attempt here. The fresh
-            // executor claims it only after the exact target has been loaded and
-            // any shell transport prerequisite is actually ready.
+            // The target decides which coordinator process is correct. Standalone
+            // needs the historical fresh process; shell-required execution must stay
+            // with the ShizukuProvider process because that process owns the client Binder.
             pendingBootToken = bootToken
-            val executorIntent = Intent(this, AutoRootExecutorService::class.java)
+            val executorClass = if (shellTransportRequired) {
+                AutoRootShellExecutorService::class.java
+            } else {
+                AutoRootExecutorService::class.java
+            }
+            val executorIntent = Intent(this, executorClass)
                 .setAction(AutoRootExecutorService.ACTION_RUN_AUTO_ROOT)
+            Log.i(
+                TAG,
+                "Binding Auto Root executor=${executorClass.simpleName} shellRequired=$shellTransportRequired",
+            )
             val bindFlags = Context.BIND_AUTO_CREATE or
                 Context.BIND_IMPORTANT or
                 Context.BIND_ABOVE_CLIENT
             require(bindService(executorIntent, executorConnection, bindFlags)) {
-                "Unable to bind fresh Auto Root executor"
+                "Unable to bind Auto Root executor ${executorClass.simpleName}"
             }
             executorBound = true
 
             // bindService(true) only means the bind request was accepted. It does
-            // not prove that :autoroot_exec exists or onServiceConnected ran.
+            // not prove that the selected executor exists or onServiceConnected ran.
             handoffTimeoutJob = scope.launch {
                 delay(EXECUTOR_CONNECT_TIMEOUT_MILLIS)
                 if (!executorConnected && !shuttingDown) {
                     failWithoutExecutorResult(
-                        "fresh Auto Root executor did not connect within ${EXECUTOR_CONNECT_TIMEOUT_MILLIS / 1_000}s",
+                        "Auto Root executor ${executorClass.simpleName} did not connect within ${EXECUTOR_CONNECT_TIMEOUT_MILLIS / 1_000}s",
                     )
                 }
             }
