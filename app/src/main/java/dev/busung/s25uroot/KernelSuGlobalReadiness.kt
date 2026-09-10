@@ -3,11 +3,15 @@ package dev.busung.s25uroot
 import android.content.Context
 
 /**
- * Verifies the userspace completion boundary of the CZG3 late-load path.
- * KernelSU control becoming visible is not enough: the patched ksud publishes
- * a boot-scoped marker only after its blocking mount stages complete in PID 1's
- * mount namespace. When a metamodule is installed, its backing mount must also
- * be visible in /proc/1/mountinfo.
+ * Verifies the boot-scoped userspace completion boundary of the RMG KernelSU
+ * late-load path. KernelSU control becoming visible is not enough: the patched
+ * ksud publishes a marker only after its blocking late-load stages complete in
+ * PID 1's mount namespace.
+ *
+ * Individual metamodule mounts are deliberately not part of this root/readiness
+ * contract. They are module-lifecycle outcomes and may be absent or pending even
+ * though KernelSU itself is fully loaded and ready. Actions that specifically
+ * repair/reload modules can validate their own mount result separately.
  */
 internal object KernelSuGlobalReadiness {
     fun probe(context: Context, bootToken: String): LocalAdbClient.ShellResult =
@@ -25,11 +29,7 @@ internal object KernelSuGlobalReadiness {
                 "echo 'late-load readiness marker belongs to another kernel boot' >&2; exit 72; }; " +
                 "grep -Fqx \"mount_ns=\$init\" \"\$marker\" || { " +
                 "echo 'late-load marker was not published from PID1 mount namespace' >&2; exit 73; }; " +
-                "if [ -f /data/adb/metamodule/metamount.sh ] || [ -f /data/adb/metamodule/module.prop ]; then " +
-                "awk '\$5 == \"/data/adb/metamodule/mnt\" { found=1; exit } END { exit(found ? 0 : 1) }' " +
-                "/proc/1/mountinfo || { echo 'metamodule mount missing from PID1 mountinfo' >&2; exit 74; }; " +
-                "echo 'metamodule mount verified in PID1 mountinfo'; " +
-                "fi; " +
+                "echo 'KernelSU late-load marker verified in PID1 mount namespace'; " +
                 "cat \"\$marker\""
     }
 
