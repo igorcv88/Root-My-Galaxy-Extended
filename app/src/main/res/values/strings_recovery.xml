@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="restart_zygote_after_root_title">Restart Zygote after root</string>
+    <string name="restart_zygote_after_root_description">After KernelSU is verified, recreate Zygote and system_server so Zygisk and LSPosed can attach without a full KernelSU userspace reboot.</string>
+    <string name="zygote_restart_starting">Restarting Zygote after root</string>
+    <string name="zygote_restart_failed">Root succeeded, but Zygote restart did not start: %1$s</string>
+
+    <string name="recovery_tools_title">Root recovery tools</string>
+    <string name="recovery_tools_description">Use these only after KernelSU is active. Start with the lightest action that matches the problem.</string>
+    <string name="recovery_restart_zygote_title">Restart Zygote</string>
+    <string name="recovery_restart_zygote_description">Recreates Zygote and system_server without restarting the kernel. Use when Zygisk, LSPosed, or app hooks did not attach after root.</string>
+    <string name="recovery_reload_modules_title">Reload KernelSU modules</string>
+    <string name="recovery_reload_modules_description">Re-runs KernelSU late-load module stages with the installed ksud. Use when module scripts, system properties, or metamodule mounts did not apply.</string>
+    <string name="recovery_soft_reboot_title">KernelSU soft reboot</string>
+    <string name="recovery_soft_reboot_description">Runs KernelSU\'s native userspace restart and module lifecycle. Use when several modules or mounts need a clean userspace reload.</string>
+    <string name="recovery_reboot_unroot_title">Reboot &amp; unroot</string>
+    <string name="recovery_reboot_unroot_description">Performs a full device reboot and clears the temporary KernelSU session. Auto Root is disabled first so the phone stays unrooted.</string>
+    <string name="recovery_hold_hint">Hold an action for 1.4 seconds to run it.</string>
+    <string name="recovery_root_required">KernelSU must be active before these actions can run.</string>
+    <string name="recovery_unroot_warning">Reboot &amp; unroot disables Auto Root before reboot. Re-enable Auto Root later if you want root restored automatically.</string>
+    <string name="recovery_action_accepted">%1$s</string>
+    <string name="recovery_action_failed">Recovery action failed: %1$s</string>
+</resources>
