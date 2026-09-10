@@ -62,10 +62,11 @@ internal fun chooseManualRunTransport(
     shizukuUsable: Boolean,
     localAdbPaired: Boolean,
 ): ManualRunTransport? {
-    if (shizukuRequested && shizukuUsable) return ManualRunTransport.Shizuku
     if (shellRequired) {
-        return if (localAdbPaired) ManualRunTransport.LocalAdb else null
+        if (localAdbPaired) return ManualRunTransport.LocalAdb
+        return if (shizukuRequested && shizukuUsable) ManualRunTransport.Shizuku else null
     }
+    if (shizukuRequested && shizukuUsable) return ManualRunTransport.Shizuku
     return if (shizukuRequested) null else ManualRunTransport.App
 }
 
@@ -284,6 +285,18 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private suspend fun selectRunTransport(profile: TargetProfile): ManualRunTransport {
+        val shellRequired = profile.routePolicy.prefersShellTransport
+        val localAdbPaired = AppPreferences.adbPaired(app)
+
+        // ZZI4 was hardware-validated through the paired Local ADB shell. Keep
+        // that launch path deterministic even when a Shizuku binder happens to
+        // be alive after boot; the exploit is scheduler-sensitive despite both
+        // transports reporting uid=2000 / u:r:shell:s0.
+        if (profile.profileId == "pa3q-S938BXXUCZZI4" && shellRequired && localAdbPaired) {
+            appendLog("[*] ZZI4 Manual transport pinned to paired Local ADB shell")
+            return ManualRunTransport.LocalAdb
+        }
+
         val requestedShizuku = AppPreferences.shizukuMode(app)
         var shizukuUsable = false
         if (requestedShizuku) {
@@ -294,17 +307,17 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             }
             if (shizukuUsable) {
                 appendLog(app.getString(R.string.log_shizuku_permission))
-            } else if (profile.routePolicy.prefersShellTransport) {
+            } else if (shellRequired) {
                 appendLog("[!] Shizuku is unavailable; using paired local ADB for this shell-required target")
             }
         }
 
         return chooseManualRunTransport(
-            shellRequired = profile.routePolicy.prefersShellTransport,
+            shellRequired = shellRequired,
             shizukuRequested = requestedShizuku,
             shizukuUsable = shizukuUsable,
-            localAdbPaired = AppPreferences.adbPaired(app),
-        ) ?: if (profile.routePolicy.prefersShellTransport) {
+            localAdbPaired = localAdbPaired,
+        ) ?: if (shellRequired) {
             error("This target requires shell transport, but neither Shizuku nor the paired local ADB key is usable")
         } else {
             error(app.getString(R.string.error_shizuku_unavailable))
