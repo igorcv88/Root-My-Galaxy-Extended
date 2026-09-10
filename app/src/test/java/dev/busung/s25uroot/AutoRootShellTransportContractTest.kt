@@ -39,6 +39,31 @@ class AutoRootShellTransportContractTest {
     }
 
     @Test
+    fun shellRequiredAutoRootUsesProviderProcessExecutor() {
+        val gate = source("AutoRootService.kt")
+        assertTrue(gate.contains("AutoRootShellExecutorService::class.java"))
+        assertTrue(gate.contains("if (shellTransportRequired)"))
+
+        val shellExecutor = source("AutoRootShellExecutorService.kt")
+        assertTrue(shellExecutor.contains(": AutoRootExecutorService()"))
+
+        val manifest = manifest()
+        val shellServiceStart = manifest.indexOf("android:name=\".AutoRootShellExecutorService\"")
+        assertTrue(shellServiceStart >= 0)
+        val shellServiceEnd = manifest.indexOf("</service>", shellServiceStart)
+            .takeIf { it >= 0 }
+            ?: manifest.indexOf("/>", shellServiceStart)
+        val shellServiceDeclaration = manifest.substring(shellServiceStart, shellServiceEnd + 2)
+        assertFalse(shellServiceDeclaration.contains("android:process="))
+
+        val standaloneServiceStart = manifest.indexOf("android:name=\".AutoRootExecutorService\"")
+        assertTrue(standaloneServiceStart >= 0)
+        val standaloneServiceEnd = manifest.indexOf("/>", standaloneServiceStart)
+        val standaloneDeclaration = manifest.substring(standaloneServiceStart, standaloneServiceEnd + 2)
+        assertTrue(standaloneDeclaration.contains("android:process=\":autoroot_exec\""))
+    }
+
+    @Test
     fun autoRootRunnerHonorsShellRouteInsteadOfAppFallback() {
         val runner = source("AutoRootRunner.kt")
         assertTrue(runner.contains("payloads.profile.routePolicy.prefersShellTransport"))
