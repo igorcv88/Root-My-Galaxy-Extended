@@ -8,6 +8,8 @@ import android.content.Intent
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * RMG treats Wireless Debugging as a short-lived transport, never as persistent
@@ -17,8 +19,14 @@ import kotlinx.coroutines.delay
  * A best-effort alarm is also armed before enabling it. If the app process dies
  * during the narrow ADB window, the receiver still gets a chance to force the
  * setting off later instead of leaving Wireless Debugging enabled indefinitely.
+ *
+ * All in-process users are serialized. Shizuku boot bootstrap and shell-required
+ * Auto Root both live in the provider process; without this lock one caller could
+ * disable Wireless Debugging while the other still owns an authenticated session.
  */
 internal object TemporaryWirelessAdb {
+    private val sessionMutex = Mutex()
+
     fun begin(
         context: Context,
         onLog: (String) -> Unit = {},
@@ -39,13 +47,13 @@ internal object TemporaryWirelessAdb {
         settleMillis: Long = 1_000L,
         onLog: (String) -> Unit = {},
         block: suspend () -> T,
-    ): T {
+    ): T = sessionMutex.withLock {
         check(begin(context, onLog)) {
             "Unable to enable Wireless Debugging; WRITE_SECURE_SETTINGS is required"
         }
         try {
             if (settleMillis > 0) delay(settleMillis)
-            return block()
+            block()
         } finally {
             forceDisable(context, onLog)
         }
