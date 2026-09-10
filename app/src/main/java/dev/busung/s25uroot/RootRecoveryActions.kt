@@ -246,6 +246,14 @@ internal object RootRecoveryActions {
             accepted = false,
             detail = "KernelSU root is not available for this boot",
         )
+        val autoRootWasEnabled = AppPreferences.autoRootEnabled(context)
+        if (!AppPreferences.setAutoRootEnabledImmediately(context, false)) {
+            return@withContext RootRecoveryResult(
+                accepted = false,
+                detail = "Unable to persist Auto Root disabled before reboot",
+            )
+        }
+
         val token = actionToken()
         val scriptPath = "/data/local/tmp/rmg-reboot-unroot-$token.sh"
         val logPath = "/data/local/tmp/rmg-reboot-unroot.log"
@@ -269,10 +277,15 @@ internal object RootRecoveryActions {
             script = script,
             acceptedMarker = "RMG_REBOOT_UNROOT_ACCEPTED",
         )
-        if (!launch.accepted) launch else RootRecoveryResult(
-            accepted = true,
-            detail = "Full reboot scheduled; the ephemeral KernelSU session will be cleared",
-        )
+        if (!launch.accepted) {
+            if (autoRootWasEnabled) AppPreferences.setAutoRootEnabledImmediately(context, true)
+            launch
+        } else {
+            RootRecoveryResult(
+                accepted = true,
+                detail = "Full reboot scheduled; Auto Root disabled and ephemeral KernelSU will be cleared",
+            )
+        }
     }
 
     private fun verifiedRootBoot(context: Context): String? {

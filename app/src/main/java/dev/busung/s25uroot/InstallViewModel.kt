@@ -411,7 +411,8 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private suspend fun installKernelSu(payloads: VerifiedPayloads) {
-        val autoLoaded = waitForAutoLateLoad()
+        val bootToken = currentBootToken() ?: error(app.getString(R.string.error_boot_id))
+        val autoLoaded = waitForAutoLateLoad(bootToken)
 
         if (shizukuEnabled()) {
             shizukuStage(payloads.kernelSu, SHIZUKU_KSUD_PATH, "755")
@@ -443,18 +444,45 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             app.getString(R.string.error_ksu_verify, verification.code, verification.output)
         }
         if (verification.code == 0 && verification.output.isNotBlank()) appendLog(verification.output)
+
+        val global = KernelSuGlobalReadiness.probe(app, bootToken)
+        require(global.exitCode == 0) {
+            app.getString(
+                R.string.error_ksu_verify,
+                global.exitCode,
+                global.output.ifBlank { "KernelSU late-load global readiness is not satisfied" },
+            )
+        }
+        if (global.output.isNotBlank()) appendLog(global.output)
         storeInstallReceipt()
         appendLog(app.getString(R.string.log_ksu_control_verified))
     }
 
-    private suspend fun waitForAutoLateLoad(): Boolean {
+    private suspend fun waitForAutoLateLoad(bootToken: String): Boolean {
         val deadline = SystemClock.elapsedRealtime() + AUTO_LATE_LOAD_WAIT_MILLIS
+        var lastOutput = ""
         while (SystemClock.elapsedRealtime() < deadline) {
             val probe = runCatching { runHelper("--ksu-info") }.getOrNull()
-            if (probe?.code == 0 || NativeProbe.isKernelSuActive()) return true
+            val controlActive = probe?.code == 0 || NativeProbe.isKernelSuActive()
+            if (controlActive) {
+                val global = runCatching { KernelSuGlobalReadiness.probe(app, bootToken) }.getOrNull()
+                if (global != null) {
+                    lastOutput = global.output
+                    if (global.exitCode == 0) {
+                        if (probe?.code == 0 && probe.output.isNotBlank()) appendLog(probe.output)
+                        if (global.output.isNotBlank()) appendLog(global.output)
+                        return true
+                    }
+                }
+            } else if (probe != null && probe.output.isNotBlank()) {
+                lastOutput = probe.output
+            }
             delay(AUTO_LATE_LOAD_POLL_INTERVAL)
         }
-        return NativeProbe.isKernelSuActive()
+        if (lastOutput.isNotBlank()) {
+            appendLog("[*] auto-late-load readiness probe: ${lastOutput.takeLast(320)}")
+        }
+        return false
     }
 
     private fun detectInstalled(): Boolean {
