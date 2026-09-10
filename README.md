@@ -1,14 +1,14 @@
 <p align="center">
-  <img src=".github/assets/root-my-galaxy-banner.svg" alt="Root My Galaxy" width="100%" />
+  <img src=".github/assets/root-my-galaxy-banner.svg" alt="Root My Galaxy Extended" width="100%" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/igorcv88/Root-My-Galaxy-S938B?label=release" /></a>
-  <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/igorcv88/Root-My-Galaxy-S938B/total" /></a>
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-Extended/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/igorcv88/Root-My-Galaxy-Extended?label=release" /></a>
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-Extended/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/igorcv88/Root-My-Galaxy-Extended/total" /></a>
   <img alt="Android" src="https://img.shields.io/badge/Android-16%20%2F%2017-3DDC84?logo=android&amp;logoColor=white" />
   <img alt="KernelSU" src="https://img.shields.io/badge/KernelSU-3.3.0-2f81f7" />
-  <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/actions/workflows/release.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/igorcv88/Root-My-Galaxy-S938B/release.yml?branch=main&amp;label=build" /></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/igorcv88/Root-My-Galaxy-S938B" /></a>
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-Extended/actions/workflows/release.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/igorcv88/Root-My-Galaxy-Extended/release.yml?branch=main&amp;label=build" /></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/igorcv88/Root-My-Galaxy-Extended" /></a>
 </p>
 
 <p align="center">
@@ -16,11 +16,34 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/igorcv88/Root-My-Galaxy-Payloads-S938B">Payloads</a>
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-Payloads-Extended">Payloads</a>
   ·
   <a href="https://github.com/BuSung-dev/Root-My-Galaxy">Upstream app</a>
   ·
-  <a href="https://github.com/igorcv88/Root-My-Galaxy-S938B/releases/latest">Latest release</a>
+  <a href="https://github.com/igorcv88/Root-My-Galaxy-Extended/releases/latest">Latest release</a>
+</p>
+
+## Root My Galaxy Extended
+
+This fork builds on [BuSung-dev's original Root My Galaxy](https://github.com/BuSung-dev/Root-My-Galaxy), combining the Samsung root app with maintained Galaxy S25 Ultra payloads and Samsung-specific KernelSU integration. It brings together upstream work, later contributions from other forks, and app-side automation and recovery features.
+
+| Area | Included in this fork |
+| --- | --- |
+| Root modes | Auto Root, Manual Online, Manual Offline and a verified local cache |
+| KernelSU | Samsung-specific 3.3.0 integration and separate firmware profiles |
+| Shizuku | Optional startup at boot and after root, with local Wireless ADB support |
+| Recovery | Restart Zygote, Reload KernelSU modules, KernelSU soft reboot, Reboot & unroot |
+| Settings | Payload source, boot timing and optional post-root behavior |
+| History | Manual and automatic runs, individual logs and bulk ZIP export |
+
+The upstream reference here is the original BuSung project. These features include adapted contributions credited below; not every component originated in this fork. “Extended” does not expand device compatibility beyond the maintained profiles.
+
+<p align="center">
+  <a href="#maintained-s938b-profiles">Compatibility</a> ·
+  <a href="#current-architecture">Architecture</a> ·
+  <a href="#auto-root">Auto Root</a> ·
+  <a href="#recovery-controls">Recovery</a> ·
+  <a href="#credits-and-provenance">Credits</a>
 </p>
 
 > [!WARNING]
@@ -178,6 +201,19 @@ optional post-root automation
 
 A soft/userspace reboot does not change `/proc/sys/kernel/random/boot_id`, so duplicate framework boot events are consumed without launching another exploit.
 
+## Recovery controls
+
+Settings includes four recovery controls, all requiring active KernelSU:
+
+| Control | Effect |
+| --- | --- |
+| Restart Zygote | Restarts Android framework processes without rebooting the kernel |
+| Reload KernelSU modules | Reapplies module stages using the installed KernelSU |
+| KernelSU soft reboot | Restarts Android userspace and its module lifecycle |
+| Reboot & unroot | Disables Auto Root, then performs a full reboot to clear temporary root |
+
+These controls interrupt apps or module state; they are not an unbrick tool. Rebooting clears the temporary root session, but does not undo every change made by root apps or modules.
+
 ## History and diagnostics
 
 History stores manual and automatic runs, target profile, terminal result and runtime logs. The exploit path avoids continuous persistence inside the sensitive race window; terminal state is written after the root path is complete.
@@ -198,7 +234,7 @@ Payload publication is maintained in the companion repository. Its workflow is t
 
 ## Credits and provenance
 
-This fork combines work from several projects and contributors. Credit is explicit because substantial parts of the implementation are derived or adapted rather than newly invented here.
+This fork includes work derived or adapted from the projects and contributors below.
 
 - **[BuSung-dev/Root-My-Galaxy](https://github.com/BuSung-dev/Root-My-Galaxy)** — upstream application architecture, UI and original project.
 - **[BuSung-dev/Root-My-Galaxy-Payloads](https://github.com/BuSung-dev/Root-My-Galaxy-Payloads)** — upstream payload/feed architecture and Samsung exploit integration.
