@@ -35,7 +35,10 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Apply deterministic source repair
-        run: python3 .github/scripts/fix_autoroot_shizuku_boot.py
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/fix_autoroot_shizuku_boot.py
+          sed -i 's/private val SHIZUKU_LOG_POLL_INTERVAL = 1\.seconds/private val SHIZUKU_LOG_POLL_INTERVAL = 1_000.milliseconds/' app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt
 
       - name: Verify transport and boot invariants
         run: |
