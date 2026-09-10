@@ -1,0 +1,157 @@
+name: Advanced recovery feature CI
+
+on:
+  push:
+    branches:
+      - feature/advanced-root-recovery
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Integrate Advanced recovery UI
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("app/src/main/java/dev/busung/s25uroot/MainActivity.kt")
+          text = path.read_text()
+
+          replacements = [
+              ("softRebootAfterRoot", "restartZygoteAfterRoot"),
+              ("onSoftRebootAfterRootChanged", "onRestartZygoteAfterRootChanged"),
+              ("setSoftRebootAfterRoot", "setRestartZygoteAfterRoot"),
+              ("R.string.soft_reboot_title", "R.string.restart_zygote_after_root_title"),
+              ("R.string.soft_reboot_description", "R.string.restart_zygote_after_root_description"),
+          ]
+          for old, new in replacements:
+              if old in text:
+                  text = text.replace(old, new)
+              elif new not in text:
+                  raise SystemExit(f"Expected MainActivity token missing: {old}")
+
+          call_old = """                AppPage.Settings -> SettingsPage(
+                    padding = padding,
+                    device = device,
+                    accentColor = accentColor,
+"""
+          call_new = """                AppPage.Settings -> SettingsPage(
+                    padding = padding,
+                    device = device,
+                    installState = installState,
+                    accentColor = accentColor,
+"""
+          if call_new not in text:
+              if call_old not in text:
+                  raise SystemExit("SettingsPage call anchor changed")
+              text = text.replace(call_old, call_new, 1)
+
+          sig_old = """private fun SettingsPage(
+    padding: PaddingValues,
+    device: DeviceSnapshot,
+    accentColor: AccentColor,
+"""
+          sig_new = """private fun SettingsPage(
+    padding: PaddingValues,
+    device: DeviceSnapshot,
+    installState: InstallUiState,
+    accentColor: AccentColor,
+"""
+          if sig_new not in text:
+              if sig_old not in text:
+                  raise SystemExit("SettingsPage signature anchor changed")
+              text = text.replace(sig_old, sig_new, 1)
+
+          advanced_old = """        item {
+            SettingsSwitchCard(
+                icon = Icons.Rounded.Memory,
+                title = stringResource(R.string.advanced_mode),
+                description = stringResource(R.string.advanced_mode_description),
+                checked = advancedMode,
+                onCheckedChange = {
+                    clickHaptic(view)
+                    onAdvancedModeChanged(it)
+                },
+            )
+        }
+        item { SectionLabel(stringResource(R.string.about)) }
+"""
+          advanced_new = """        item {
+            SettingsSwitchCard(
+                icon = Icons.Rounded.Memory,
+                title = stringResource(R.string.advanced_mode),
+                description = stringResource(R.string.advanced_mode_description),
+                checked = advancedMode,
+                onCheckedChange = {
+                    clickHaptic(view)
+                    onAdvancedModeChanged(it)
+                },
+            )
+        }
+        if (advancedMode) {
+            item {
+                AdvancedRecoverySettings(
+                    rootActive = installState.phase == InstallPhase.Installed,
+                    autoRootEnabled = autoRootEnabled,
+                    onAutoRootEnabledChanged = onAutoRootEnabledChanged,
+                )
+            }
+        }
+        item { SectionLabel(stringResource(R.string.about)) }
+"""
+          if advanced_new not in text:
+              if advanced_old not in text:
+                  raise SystemExit("Advanced section anchor changed")
+              text = text.replace(advanced_old, advanced_new, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Verify obsolete automatic soft-reboot references are gone
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R --line-number -E 'AppPreferences\.(softRebootAfterRoot|setSoftRebootAfterRoot)' app/src/main/java; then
+            echo "Obsolete automatic soft-reboot preference reference remains" >&2
+            exit 1
+          fi
+
+      - name: Test, lint and assemble release
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --build-cache \
+            :app:testDebugUnitTest \
+            :app:lintDebug \
+            :app:assembleRelease
+
+      - name: Commit generated MainActivity integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- app/src/main/java/dev/busung/s25uroot/MainActivity.kt; then
+            echo "MainActivity integration already committed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/dev/busung/s25uroot/MainActivity.kt
+          git commit -m "Expose root recovery tools in Advanced settings"
+          git push origin HEAD:feature/advanced-root-recovery
