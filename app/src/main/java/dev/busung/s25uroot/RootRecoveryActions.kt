@@ -117,7 +117,7 @@ internal object RootRecoveryActions {
             #!/system/bin/sh
             printf '%s\n' '${token}' > '${markerPath}'
             chmod 0666 '${markerPath}' 2>/dev/null || true
-            rm -f -- "${'$'}0"
+            rm -f -- '${hookPath}'
             RMG_RELOAD_HOOK
             chmod 0755 "${'$'}HOOK"
 
