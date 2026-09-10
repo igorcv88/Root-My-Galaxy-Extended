@@ -46,75 +46,84 @@ jobs:
               elif new not in text:
                   raise SystemExit(f"Expected MainActivity token missing: {old}")
 
-          call_old = """                AppPage.Settings -> SettingsPage(
-                    padding = padding,
-                    device = device,
-                    accentColor = accentColor,
-"""
-          call_new = """                AppPage.Settings -> SettingsPage(
-                    padding = padding,
-                    device = device,
-                    installState = installState,
-                    accentColor = accentColor,
-"""
+          def lines(*items):
+              return "\n".join(items) + "\n"
+
+          call_old = lines(
+              "                AppPage.Settings -> SettingsPage(",
+              "                    padding = padding,",
+              "                    device = device,",
+              "                    accentColor = accentColor,",
+          )
+          call_new = lines(
+              "                AppPage.Settings -> SettingsPage(",
+              "                    padding = padding,",
+              "                    device = device,",
+              "                    installState = installState,",
+              "                    accentColor = accentColor,",
+          )
           if call_new not in text:
               if call_old not in text:
                   raise SystemExit("SettingsPage call anchor changed")
               text = text.replace(call_old, call_new, 1)
 
-          sig_old = """private fun SettingsPage(
-    padding: PaddingValues,
-    device: DeviceSnapshot,
-    accentColor: AccentColor,
-"""
-          sig_new = """private fun SettingsPage(
-    padding: PaddingValues,
-    device: DeviceSnapshot,
-    installState: InstallUiState,
-    accentColor: AccentColor,
-"""
+          sig_old = lines(
+              "private fun SettingsPage(",
+              "    padding: PaddingValues,",
+              "    device: DeviceSnapshot,",
+              "    accentColor: AccentColor,",
+          )
+          sig_new = lines(
+              "private fun SettingsPage(",
+              "    padding: PaddingValues,",
+              "    device: DeviceSnapshot,",
+              "    installState: InstallUiState,",
+              "    accentColor: AccentColor,",
+          )
           if sig_new not in text:
               if sig_old not in text:
                   raise SystemExit("SettingsPage signature anchor changed")
               text = text.replace(sig_old, sig_new, 1)
 
-          advanced_old = """        item {
-            SettingsSwitchCard(
-                icon = Icons.Rounded.Memory,
-                title = stringResource(R.string.advanced_mode),
-                description = stringResource(R.string.advanced_mode_description),
-                checked = advancedMode,
-                onCheckedChange = {
-                    clickHaptic(view)
-                    onAdvancedModeChanged(it)
-                },
-            )
-        }
-        item { SectionLabel(stringResource(R.string.about)) }
-"""
-          advanced_new = """        item {
-            SettingsSwitchCard(
-                icon = Icons.Rounded.Memory,
-                title = stringResource(R.string.advanced_mode),
-                description = stringResource(R.string.advanced_mode_description),
-                checked = advancedMode,
-                onCheckedChange = {
-                    clickHaptic(view)
-                    onAdvancedModeChanged(it)
-                },
-            )
-        }
-        if (advancedMode) {
-            item {
-                AdvancedRecoverySettings(
-                    rootActive = installState.phase == InstallPhase.Installed,
-                    autoRootEnabled = autoRootEnabled,
-                    onAutoRootEnabledChanged = onAutoRootEnabledChanged,
-                )
-            }
-        }
-        item { SectionLabel(stringResource(R.string.about)) }
-"""
+          advanced_old = lines(
+              "        item {",
+              "            SettingsSwitchCard(",
+              "                icon = Icons.Rounded.Memory,",
+              "                title = stringResource(R.string.advanced_mode),",
+              "                description = stringResource(R.string.advanced_mode_description),",
+              "                checked = advancedMode,",
+              "                onCheckedChange = {",
+              "                    clickHaptic(view)",
+              "                    onAdvancedModeChanged(it)",
+              "                },",
+              "            )",
+              "        }",
+              "        item { SectionLabel(stringResource(R.string.about)) }",
+          )
+          advanced_new = lines(
+              "        item {",
+              "            SettingsSwitchCard(",
+              "                icon = Icons.Rounded.Memory,",
+              "                title = stringResource(R.string.advanced_mode),",
+              "                description = stringResource(R.string.advanced_mode_description),",
+              "                checked = advancedMode,",
+              "                onCheckedChange = {",
+              "                    clickHaptic(view)",
+              "                    onAdvancedModeChanged(it)",
+              "                },",
+              "            )",
+              "        }",
+              "        if (advancedMode) {",
+              "            item {",
+              "                AdvancedRecoverySettings(",
+              "                    rootActive = installState.phase == InstallPhase.Installed,",
+              "                    autoRootEnabled = autoRootEnabled,",
+              "                    onAutoRootEnabledChanged = onAutoRootEnabledChanged,",
+              "                )",
+              "            }",
+              "        }",
+              "        item { SectionLabel(stringResource(R.string.about)) }",
+          )
           if advanced_new not in text:
               if advanced_old not in text:
                   raise SystemExit("Advanced section anchor changed")
