@@ -23,9 +23,27 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/apply-zzi4-postroot-order.py
-          # Escape the shell variable spelling inside the Kotlin structural test.
           python3 - <<'PY'
           from pathlib import Path
+
+          # Keep Auto Root's remote ksud verification byte-for-byte equivalent
+          # to the already compiled Manual implementation. The one-shot patcher
+          # intentionally emits this block through Python, so normalize the
+          # Kotlin/shell escaping here before compilation.
+          p = Path('app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt')
+          s = p.read_text()
+          start = s.index('    private fun zzi4KernelSuVerifyCommand(): String =')
+          end = s.index('\n\n    private fun verifyZzi4KernelSuPreStage(', start)
+          replacement = r'''    private fun zzi4KernelSuVerifyCommand(): String =
+              "set -e; " +
+                  "h=$(/system/bin/toybox sha256sum ${shellQuote(KSUD_PATH)} | " +
+                  "/system/bin/toybox awk '{print \$1}'); " +
+                  "s=$(/system/bin/toybox wc -c < ${shellQuote(KSUD_PATH)}); " +
+                  "printf '%s %s\\n' \"\$h\" \"\$s\""'''
+          s = s[:start] + replacement + s[end:]
+          p.write_text(s)
+
+          # Escape the shell variable spelling inside the Kotlin structural test.
           p = Path('app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt')
           s = p.read_text()
           s = s.replace('setsid \\"$LS/daemon\\" --force', 'setsid \\"\\$LS/daemon\\" --force')
