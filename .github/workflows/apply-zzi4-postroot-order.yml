@@ -43,10 +43,20 @@ jobs:
           s = s[:start] + replacement + s[end:]
           p.write_text(s)
 
-          # Escape the shell variable spelling inside the Kotlin structural test.
+          # Normalize the structural test: function definitions occur before
+          # execution, so measure the first module_ready invocation rather than
+          # the modules_info token inside the function definition.
           p = Path('app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt')
           s = p.read_text()
           s = s.replace('setsid \\"$LS/daemon\\" --force', 'setsid \\"\\$LS/daemon\\" --force')
+          s = s.replace(
+              'val modules = command.indexOf("modules_info")',
+              'val modules = command.indexOf("if ! module_ready; then")',
+          )
+          s = s.replace(
+              'assertTrue(modules > linker)',
+              'assertTrue(modules > daemon)',
+          )
           p.write_text(s)
           PY
 
