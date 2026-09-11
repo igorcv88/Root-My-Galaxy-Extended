@@ -255,23 +255,40 @@ open class AutoRootExecutorService : Service() {
             if (restartZygote || startShizuku) {
                 if (restartZygote) updateNotification(getString(R.string.zygote_restart_starting))
 
-                if (startShizuku) {
-                    val postRoot = try {
+                val requireZzi4Runtime =
+                    restartZygote && payloads.profile.profileId == Zzi4PostRootRuntime.PROFILE_ID
+                val postRoot = if (startShizuku || requireZzi4Runtime) {
+                    try {
                         PostRootAutomation.run(
                             context = this,
                             softReboot = false,
-                            startShizuku = true,
+                            startShizuku = startShizuku,
+                            prepareZzi4Modules = requireZzi4Runtime,
                             onLog = { appendHistory(it) },
                         )
                     } catch (error: Throwable) {
                         val detail = error.message ?: error.javaClass.simpleName
-                        appendHistory("[!] Post-root Shizuku automation failed: $detail")
-                        Log.w(TAG, "Post-root Shizuku automation failed after verified root", error)
+                        appendHistory("[!] Post-root automation failed: $detail")
+                        Log.w(TAG, "Post-root automation failed after verified root", error)
                         null
                     }
-                    if (postRoot != null && !postRoot.shizukuStarted && postRoot.detail.isNotBlank()) {
-                        appendHistory("[!] Post-root Shizuku automation: ${postRoot.detail.take(200)}")
-                    }
+                } else {
+                    null
+                }
+                if (startShizuku && postRoot != null &&
+                    !postRoot.shizukuStarted && postRoot.detail.isNotBlank()
+                ) {
+                    appendHistory("[!] Post-root Shizuku automation: ${postRoot.detail.take(200)}")
+                }
+
+                if (restartZygote && requireZzi4Runtime && postRoot?.zzi4RuntimeReady != true) {
+                    val detail = postRoot?.detail ?: "ZZI4 post-root runtime could not be verified"
+                    val message = "KernelSU root is active; Zygote restart skipped: ${detail.take(180)}"
+                    appendHistory("[!] $message")
+                    finishHistory(InstallRunResult.Succeeded)
+                    Log.w(TAG, message)
+                    finishWithResult(message)
+                    return
                 }
 
                 if (restartZygote) {

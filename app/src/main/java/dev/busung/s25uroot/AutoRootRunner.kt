@@ -70,7 +70,7 @@ internal class AutoRootRunner(
 
         onStage(AutoRootStage.RunningExploit)
         executeExploit(
-            payload = payloads.exploit,
+            payloads = payloads,
             bootToken = bootToken,
             policy = payloads.profile.routePolicy,
             shellTransport = shellTransport,
@@ -178,12 +178,13 @@ internal class AutoRootRunner(
     }
 
     private suspend fun executeExploit(
-        payload: File,
+        payloads: VerifiedPayloads,
         bootToken: String,
         policy: ExploitRoutePolicy,
         shellTransport: AutoRootShellTransport?,
         beforeExploit: () -> Unit,
     ) {
+        val payload = payloads.exploit
         val useShellTransport = shellTransport != null
         onLog(
             policy.describe(
@@ -209,7 +210,7 @@ internal class AutoRootRunner(
             runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
             try {
                 executeExploitViaLocalAdb(
-                    payload = payload,
+                    payloads = payloads,
                     localHelper = localHelper,
                     bootToken = bootToken,
                     policy = policy,
@@ -242,6 +243,9 @@ internal class AutoRootRunner(
 
                 val stagedHelper = shizukuStage(localHelper, SHELL_HELPER_PATH)
                 val stagedPayload = shizukuStage(payload, SHELL_PAYLOAD_PATH)
+                if (payloads.profile.profileId == Zzi4PostRootRuntime.PROFILE_ID) {
+                    preStageZzi4KernelSuViaShizuku(payloads)
+                }
                 beforeExploit()
                 ShizukuController.exec(
                     arrayOf(
@@ -347,12 +351,13 @@ internal class AutoRootRunner(
     }
 
     private suspend fun executeExploitViaLocalAdb(
-        payload: File,
+        payloads: VerifiedPayloads,
         localHelper: File,
         bootToken: String,
         policy: ExploitRoutePolicy,
         beforeExploit: () -> Unit,
     ) {
+        val payload = payloads.exploit
         require(AppPreferences.adbPaired(context)) {
             "Shell-required Auto Root needs either an authorized Shizuku Binder or the paired local ADB key"
         }
@@ -380,6 +385,9 @@ internal class AutoRootRunner(
                 session.remove(SHELL_LOG_PATH)
                 session.push(localHelper, SHELL_HELPER_PATH, executable = true)
                 session.push(payload, SHELL_PAYLOAD_PATH, executable = true)
+                if (payloads.profile.profileId == Zzi4PostRootRuntime.PROFILE_ID) {
+                    preStageZzi4KernelSuViaLocalAdb(session, payloads)
+                }
 
                 val env = localAdbEnvironment(
                     bootToken = bootToken,
@@ -422,6 +430,52 @@ internal class AutoRootRunner(
                 }
             }
         }
+    }
+
+    private fun zzi4KernelSuVerifyCommand(): String =
+    "set -e; " +
+        "h=$(/system/bin/toybox sha256sum ${shellQuote(KSUD_PATH)} | " +
+        "/system/bin/toybox awk '{print \$1}'); " +
+        "s=$(/system/bin/toybox wc -c < ${shellQuote(KSUD_PATH)}); " +
+        "printf '%s %s\\n' \"\$h\" \"\$s\""
+
+    private fun verifyZzi4KernelSuPreStage(
+        payloads: VerifiedPayloads,
+        result: LocalAdbClient.ShellResult,
+    ) {
+        val artifact = payloads.profile.kernelSu.artifact
+        require(
+            result.exitCode == 0 &&
+                remoteArtifactMatches(result.output, artifact.sha256, artifact.size),
+        ) {
+            "ZZI4 Auto Root KernelSU pre-stage verification failed: expected=" +
+                "${artifact.sha256}/${artifact.size} remote=${result.output.takeLast(240)}"
+        }
+        onLog(
+            "[+] ZZI4 Auto Root pre-exploit KernelSU bootstrap verified " +
+                "sha256=${artifact.sha256} size=${artifact.size}",
+        )
+    }
+
+    private fun preStageZzi4KernelSuViaShizuku(payloads: VerifiedPayloads) {
+        val cleanup = ShizukuController.shell("rm -f ${shellQuote(KSUD_STAGE_PATH)}")
+        require(cleanup.exitCode == 0) {
+            "Unable to clear stale Auto Root KernelSU stage: ${cleanup.output}"
+        }
+        ShizukuController.writeFile(KSUD_PATH, "755", payloads.kernelSu.inputStream())
+        verifyZzi4KernelSuPreStage(
+            payloads,
+            ShizukuController.shell(zzi4KernelSuVerifyCommand()),
+        )
+    }
+
+    private fun preStageZzi4KernelSuViaLocalAdb(
+        session: WirelessAdbSession,
+        payloads: VerifiedPayloads,
+    ) {
+        session.remove(KSUD_STAGE_PATH)
+        session.push(payloads.kernelSu, KSUD_PATH, executable = true)
+        verifyZzi4KernelSuPreStage(payloads, session.shell(zzi4KernelSuVerifyCommand()))
     }
 
     private fun shizukuStage(source: File, target: String): File {

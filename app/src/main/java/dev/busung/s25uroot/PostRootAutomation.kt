@@ -10,6 +10,8 @@ import kotlinx.coroutines.withContext
 internal data class PostRootResult(
     val softRebootStarted: Boolean = false,
     val shizukuStarted: Boolean = false,
+    val zzi4RuntimeApplicable: Boolean = false,
+    val zzi4RuntimeReady: Boolean = false,
     val detail: String = "",
 )
 
@@ -29,9 +31,12 @@ internal object PostRootAutomation {
         context: Context,
         softReboot: Boolean,
         startShizuku: Boolean,
+        prepareZzi4Modules: Boolean = false,
         onLog: (String) -> Unit = {},
     ): PostRootResult = withContext(Dispatchers.IO) {
-        if (!softReboot && !startShizuku) return@withContext PostRootResult()
+        if (!softReboot && !startShizuku && !prepareZzi4Modules) {
+            return@withContext PostRootResult(zzi4RuntimeReady = true)
+        }
 
         // Root is now verified. The pre-root coordinator no longer owns Shizuku
         // startup for this boot. Stopping it also cancels any narrow ADB window
@@ -53,6 +58,7 @@ internal object PostRootAutomation {
                     rootShell = shizukuRoot,
                     softReboot = softReboot,
                     shizukuStarted = true,
+                    prepareZzi4Modules = prepareZzi4Modules,
                     onLog = onLog,
                 )
             }
@@ -84,6 +90,7 @@ internal object PostRootAutomation {
                 rootShell = preferredRoot,
                 softReboot = softReboot,
                 shizukuStarted = shizukuStarted,
+                prepareZzi4Modules = prepareZzi4Modules,
                 onLog = onLog,
             )
         }
@@ -133,6 +140,7 @@ internal object PostRootAutomation {
                 rootShell = adbRoot,
                 softReboot = softReboot,
                 shizukuStarted = shizukuStarted,
+                prepareZzi4Modules = prepareZzi4Modules,
                 onLog = onLog,
             )
         } finally {
@@ -263,12 +271,52 @@ internal object PostRootAutomation {
         rootShell: (String) -> LocalAdbClient.ShellResult,
         softReboot: Boolean,
         shizukuStarted: Boolean,
+        prepareZzi4Modules: Boolean,
         onLog: (String) -> Unit,
     ): PostRootResult {
+        var runtimeApplicable = false
+        var runtimeReady = !prepareZzi4Modules
+        var runtimeDetail = ""
+        if (prepareZzi4Modules) {
+            val runtimeBootId = AutoRootSupport.currentBootToken()
+            if (runtimeBootId.isNullOrBlank()) {
+                return PostRootResult(
+                    shizukuStarted = shizukuStarted,
+                    zzi4RuntimeApplicable = true,
+                    zzi4RuntimeReady = false,
+                    detail = "kernel boot id unavailable before ZZI4 post-root readiness",
+                )
+            }
+            val shellResult = rootShell(Zzi4PostRootRuntime.prepareCommand(runtimeBootId))
+            if (shellResult.output.isNotBlank()) {
+                onLog("[*] ZZI4 post-root readiness: ${shellResult.output.trim().takeLast(640)}")
+            }
+            val runtime = Zzi4PostRootRuntime.parse(shellResult.exitCode, shellResult.output)
+            runtimeApplicable = runtime.applicable
+            runtimeReady = runtime.ready
+            runtimeDetail = runtime.detail
+            if (!runtime.ready) {
+                onLog("[-] ZZI4 post-root runtime is not ready: ${runtime.detail}")
+                return PostRootResult(
+                    shizukuStarted = shizukuStarted,
+                    zzi4RuntimeApplicable = runtime.applicable,
+                    zzi4RuntimeReady = false,
+                    detail = "ZZI4 post-root runtime not ready: ${runtime.detail}",
+                )
+            }
+            if (runtime.applicable) {
+                onLog("[+] ZZI4 Zygisk/LSPosed runtime ready before Zygote restart")
+            } else {
+                onLog("[*] ZZI4 LSPosed runtime gate skipped: ${runtime.detail}")
+            }
+        }
+
         if (!softReboot) {
             return PostRootResult(
                 shizukuStarted = shizukuStarted,
-                detail = "post-root automation complete",
+                zzi4RuntimeApplicable = runtimeApplicable,
+                zzi4RuntimeReady = runtimeReady,
+                detail = runtimeDetail.ifBlank { "post-root automation complete" },
             )
         }
 
@@ -276,6 +324,8 @@ internal object PostRootAutomation {
         if (bootId.isNullOrBlank()) {
             return PostRootResult(
                 shizukuStarted = shizukuStarted,
+                zzi4RuntimeApplicable = runtimeApplicable,
+                zzi4RuntimeReady = runtimeReady,
                 detail = "kernel boot id unavailable before KernelSU soft reboot",
             )
         }
@@ -289,6 +339,8 @@ internal object PostRootAutomation {
             onLog("[-] KernelSU soft-reboot keeper launch failed: ${keeper.detail}")
             return PostRootResult(
                 shizukuStarted = shizukuStarted,
+                zzi4RuntimeApplicable = runtimeApplicable,
+                zzi4RuntimeReady = runtimeReady,
                 detail = keeper.detail,
             )
         }
@@ -301,6 +353,8 @@ internal object PostRootAutomation {
         return PostRootResult(
             softRebootStarted = true,
             shizukuStarted = shizukuStarted,
+            zzi4RuntimeApplicable = runtimeApplicable,
+            zzi4RuntimeReady = runtimeReady,
             detail = "KernelSU native soft-reboot handoff accepted",
         )
     }

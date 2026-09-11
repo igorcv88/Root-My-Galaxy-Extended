@@ -248,19 +248,31 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                         )
                     }
                     try {
-                        if (startShizuku) {
-                            val postRoot = PostRootAutomation.run(
+                        val requireZzi4Runtime =
+                            restartZygote && profile.profileId == Zzi4PostRootRuntime.PROFILE_ID
+                        val postRoot = if (startShizuku || requireZzi4Runtime) {
+                            PostRootAutomation.run(
                                 context = app,
                                 softReboot = false,
-                                startShizuku = true,
+                                startShizuku = startShizuku,
+                                prepareZzi4Modules = requireZzi4Runtime,
                                 onLog = ::appendLog,
                             )
-                            if (!postRoot.shizukuStarted && postRoot.detail.isNotBlank()) {
-                                appendLog("[!] Post-root Shizuku automation: ${postRoot.detail.take(200)}")
-                            }
+                        } else {
+                            null
+                        }
+                        if (startShizuku && postRoot != null &&
+                            !postRoot.shizukuStarted && postRoot.detail.isNotBlank()
+                        ) {
+                            appendLog("[!] Post-root Shizuku automation: ${postRoot.detail.take(200)}")
                         }
 
-                        if (restartZygote) {
+                        if (restartZygote && requireZzi4Runtime && postRoot?.zzi4RuntimeReady != true) {
+                            appendLog(
+                                "[!] Zygote restart skipped: " +
+                                    (postRoot?.detail ?: "ZZI4 post-root runtime could not be verified"),
+                            )
+                        } else if (restartZygote) {
                             val restart = RootRecoveryActions.restartZygote(app)
                             if (!restart.accepted) {
                                 val message = app.getString(
