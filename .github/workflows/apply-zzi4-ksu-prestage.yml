@@ -20,7 +20,10 @@ jobs:
           fetch-depth: 0
 
       - name: Apply ZZI4 KernelSU pre-stage patch
-        run: python3 tools/apply-zzi4-ksu-prestage.py
+        run: |
+          python3 tools/apply-zzi4-ksu-prestage.py
+          sed -i 's#File("app/src/main/java/dev/busung/s25uroot/InstallViewModel.kt")#File("src/main/java/dev/busung/s25uroot/InstallViewModel.kt")#' \
+            app/src/test/java/dev/busung/s25uroot/Zzi4KernelSuPrestageTest.kt
 
       - name: Java 21
         uses: actions/setup-java@v6
