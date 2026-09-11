@@ -35,7 +35,7 @@ replace_once(
 
 t = TEST.read_text(encoding='utf-8')
 anchor = '''        assertTrue(recovery.contains("restart-already-performed-this-boot"))\n        assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))'''
-replacement = '''        assertTrue(recovery.contains("restart-already-performed-this-boot"))\n        assertTrue(recovery.contains(".rmg-zzi4-postrestart-status"))\n        assertTrue(recovery.contains("RMG_ZZI4_POST_RESTART_OK"))\n        assertTrue(recovery.contains("lsposed-map-timeout"))\n        val secondary = recovery.indexOf("setprop ctl.restart zygote_secondary")\n        val markerWrite = recovery.indexOf("EXPECTED_BOOT\\\" > \\\"${'$'}BOOT_MARKER")\n        assertTrue(secondary >= 0)\n        assertTrue(markerWrite > secondary)\n        assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))'''
+replacement = '''        assertTrue(recovery.contains("restart-already-performed-this-boot"))\n        assertTrue(recovery.contains(".rmg-zzi4-postrestart-status"))\n        assertTrue(recovery.contains("RMG_ZZI4_POST_RESTART_OK"))\n        assertTrue(recovery.contains("lsposed-map-timeout"))\n        val secondary = recovery.indexOf("setprop ctl.restart zygote_secondary")\n        val markerWrite = recovery.indexOf("restart-boot-marker-write-failed")\n        assertTrue(secondary >= 0)\n        assertTrue(markerWrite > secondary)\n        assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))'''
 if t.count(anchor) != 1:
     raise SystemExit('runtime test anchor changed')
 TEST.write_text(t.replace(anchor, replacement, 1), encoding='utf-8')
