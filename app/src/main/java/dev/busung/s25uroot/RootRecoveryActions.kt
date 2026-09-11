@@ -44,7 +44,13 @@ internal object RootRecoveryActions {
             ACCEPTED_VALUE=${shellQuote(acceptedMarker)}
             ONCE_PER_BOOT=${shellQuote(oncePerBootFlag)}
             BOOT_MARKER='/data/local/tmp/.rmg-auto-zygote-restart-boot'
+            POST_STATUS='/data/local/tmp/.rmg-zzi4-postrestart-status'
+            OLD_SS="${'$'}(pidof system_server 2>/dev/null)"
             current_boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
+            publish_post_status() {
+                printf '%s\n' "${'$'}1" > "${'$'}POST_STATUS" 2>/dev/null || true
+                chmod 0666 "${'$'}POST_STATUS" 2>/dev/null || true
+            }
             publish_handoff() {
                 printf '%s\n' "${'$'}1" > "${'$'}ACCEPTED" || exit 79
                 chmod 0666 "${'$'}ACCEPTED" 2>/dev/null || true
@@ -62,13 +68,20 @@ internal object RootRecoveryActions {
             if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then
                 [ "${'$'}(cat "${'$'}BOOT_MARKER" 2>/dev/null)" != "${'$'}EXPECTED_BOOT" ] || \
                     reject_handoff 'restart-already-performed-this-boot'
-                printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}BOOT_MARKER" || \
-                    reject_handoff 'restart-boot-marker-write-failed'
-                chmod 0666 "${'$'}BOOT_MARKER" 2>/dev/null || true
+                rm -f -- "${'$'}POST_STATUS" 2>/dev/null || true
             fi
 
             if [ "${'$'}(getprop init.svc.zygote_secondary 2>/dev/null)" = "running" ]; then
                 setprop ctl.restart zygote_secondary || reject_handoff 'zygote-secondary-restart-failed'
+            fi
+
+            # Commit the once-per-boot marker only after the child-side restart
+            # prerequisites above succeed, so a failed secondary restart does not
+            # poison the boot and suppress a later automatic recovery attempt.
+            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then
+                printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}BOOT_MARKER" || \
+                    reject_handoff 'restart-boot-marker-write-failed'
+                chmod 0666 "${'$'}BOOT_MARKER" 2>/dev/null || true
             fi
 
             # Do not report success merely because this detached shell forked.
@@ -80,7 +93,51 @@ internal object RootRecoveryActions {
             # observes the acknowledgement and before system_server is recreated.
             sleep 0.75
             rm -f -- "${'$'}0"
-            setprop ctl.restart zygote
+            if ! setprop ctl.restart zygote; then
+                if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then
+                    rm -f -- "${'$'}BOOT_MARKER" 2>/dev/null || true
+                    publish_post_status 'RMG_ZZI4_POST_RESTART_ERROR reason=zygote-restart-command-failed'
+                fi
+                exit 0
+            fi
+
+            # Automatic ZZI4 recovery survives the framework restart in this
+            # detached root shell and verifies the newly-created system_server.
+            # Mapping the LSPosed Zygisk library is the hard success criterion;
+            # LSPosedBridge in logcat is recorded as an additional diagnostic.
+            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then
+                i=0
+                while [ "${'$'}i" -lt 40 ]; do
+                    if [ "${'$'}(current_boot)" != "${'$'}EXPECTED_BOOT" ]; then
+                        publish_post_status 'RMG_ZZI4_POST_RESTART_ERROR reason=boot-changed'
+                        exit 0
+                    fi
+                    NEW_SS="${'$'}(pidof system_server 2>/dev/null)"
+                    if [ -n "${'$'}NEW_SS" ] && [ "${'$'}NEW_SS" != "${'$'}OLD_SS" ]; then
+                        if grep -Fq \
+                            '/data/adb/modules/zygisk_lsposed/zygisk/arm64-v8a.so' \
+                            "/proc/${'$'}NEW_SS/maps" 2>/dev/null; then
+                            BRIDGE=0
+                            if logcat -d -b all -v threadtime 2>/dev/null | grep -Fq 'LSPosedBridge'; then
+                                BRIDGE=1
+                            fi
+                            publish_post_status \
+                                "RMG_ZZI4_POST_RESTART_OK system_server=${'$'}NEW_SS lsposed_map=1 bridge=${'$'}BRIDGE"
+                            echo "post-restart: LSPosed mapped in new system_server=${'$'}NEW_SS bridge=${'$'}BRIDGE"
+                            exit 0
+                        fi
+                    fi
+                    i="${'$'}((i + 1))"
+                    sleep 0.5
+                done
+                NEW_SS="${'$'}(pidof system_server 2>/dev/null)"
+                publish_post_status \
+                    "RMG_ZZI4_POST_RESTART_ERROR reason=lsposed-map-timeout old_ss=${'$'}OLD_SS new_ss=${'$'}NEW_SS"
+                echo "post-restart: LSPosed map verification timed out old_ss=${'$'}OLD_SS new_ss=${'$'}NEW_SS"
+                dmesg 2>/dev/null | grep -E 'defex_lsposed_compat|DEFEX.*zygisk_lsposed' | tail -n 30 || true
+                logcat -d -b all -v threadtime 2>/dev/null | \
+                    grep -E 'LSPosedBridge|LSPosedService|zygisk_lsposed|zn-daemon|zn-zygisk|dlopen' | tail -n 80 || true
+            fi
         """.trimIndent() + "\n"
 
         val launch = launchDetachedScript(

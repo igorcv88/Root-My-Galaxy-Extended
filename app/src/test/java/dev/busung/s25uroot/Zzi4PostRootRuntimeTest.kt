@@ -83,6 +83,13 @@ class Zzi4PostRootRuntimeTest {
         assertTrue(recovery.contains("oncePerBoot: Boolean = false"))
         assertTrue(recovery.contains(".rmg-auto-zygote-restart-boot"))
         assertTrue(recovery.contains("restart-already-performed-this-boot"))
+        assertTrue(recovery.contains(".rmg-zzi4-postrestart-status"))
+        assertTrue(recovery.contains("RMG_ZZI4_POST_RESTART_OK"))
+        assertTrue(recovery.contains("lsposed-map-timeout"))
+        val secondary = recovery.indexOf("setprop ctl.restart zygote_secondary")
+        val markerWrite = recovery.indexOf("restart-boot-marker-write-failed")
+        assertTrue(secondary >= 0)
+        assertTrue(markerWrite > secondary)
         assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))
         assertTrue(post.contains("Zygisk/LSPosed runtime ready before Zygote restart"))
     }
