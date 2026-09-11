@@ -1,12 +1,7 @@
 from pathlib import Path
 
-ROOT = Path('.')
-RUNTIME = ROOT / 'app/src/main/java/dev/busung/s25uroot/Zzi4PostRootRuntime.kt'
-POST = ROOT / 'app/src/main/java/dev/busung/s25uroot/PostRootAutomation.kt'
-INSTALL = ROOT / 'app/src/main/java/dev/busung/s25uroot/InstallViewModel.kt'
-AUTO = ROOT / 'app/src/main/java/dev/busung/s25uroot/AutoRootExecutorService.kt'
-RECOVERY = ROOT / 'app/src/main/java/dev/busung/s25uroot/RootRecoveryActions.kt'
-TEST = ROOT / 'app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt'
+RECOVERY = Path('app/src/main/java/dev/busung/s25uroot/RootRecoveryActions.kt')
+TEST = Path('app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt')
 
 
 def replace_once(path: Path, old: str, new: str, label: str) -> None:
@@ -18,154 +13,31 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
 
 
 replace_once(
-    RUNTIME,
-    '''internal data class Zzi4PostRootRuntimeResult(\n    val applicable: Boolean,\n    val ready: Boolean,\n    val detail: String,\n)''',
-    '''internal data class Zzi4PostRootRuntimeResult(\n    val applicable: Boolean,\n    val ready: Boolean,\n    val restartNeeded: Boolean,\n    val detail: String,\n)''',
-    'runtime result fields',
-)
-
-replace_once(
-    RUNTIME,
-    '''            EXT='absent'\n            if [ -r /sys/module/defex_lsposed_compat/parameters/bypass ]; then''',
-    '''            RESTART_NEEDED=1\n            SS="${'$'}(/system/bin/pidof system_server 2>/dev/null)"\n            if [ -n "${'$'}SS" ] && /system/bin/grep -Fq \\\n                '/data/adb/modules/zygisk_lsposed/zygisk/arm64-v8a.so' \\\n                "/proc/${'$'}SS/maps" 2>/dev/null; then\n                RESTART_NEEDED=0\n            fi\n\n            EXT='absent'\n            if [ -r /sys/module/defex_lsposed_compat/parameters/bypass ]; then''',
-    'runtime system_server injection check',
-)
-
-replace_once(
-    RUNTIME,
-    '''            printf '%s\\n' '$READY_MARKER memory_type=0 linker=0 zn_daemon=1 module=zygisk_lsposed lspd=1 permanent_defex='"${'$'}PERM"' external_helper='"${'$'}EXT"''',
-    '''            printf '%s\\n' '$READY_MARKER memory_type=0 linker=0 zn_daemon=1 module=zygisk_lsposed lspd=1 restart_needed='"${'$'}RESTART_NEEDED"' permanent_defex='"${'$'}PERM"' external_helper='"${'$'}EXT"''',
-    'runtime ready marker',
-)
-
-replace_once(
-    RUNTIME,
-    '''            return Zzi4PostRootRuntimeResult(\n                applicable = false,\n                ready = true,\n                detail = skip.removePrefix("$SKIP_MARKER:"),\n            )''',
-    '''            return Zzi4PostRootRuntimeResult(\n                applicable = false,\n                ready = true,\n                restartNeeded = true,\n                detail = skip.removePrefix("$SKIP_MARKER:"),\n            )''',
-    'runtime skip parse',
-)
-
-replace_once(
-    RUNTIME,
-    '''            return Zzi4PostRootRuntimeResult(\n                applicable = true,\n                ready = true,\n                detail = ready,\n            )''',
-    '''            return Zzi4PostRootRuntimeResult(\n                applicable = true,\n                ready = true,\n                restartNeeded = !ready.contains("restart_needed=0"),\n                detail = ready,\n            )''',
-    'runtime ready parse',
-)
-
-replace_once(
-    RUNTIME,
-    '''        return Zzi4PostRootRuntimeResult(\n            applicable = true,\n            ready = false,\n            detail = error,\n        )''',
-    '''        return Zzi4PostRootRuntimeResult(\n            applicable = true,\n            ready = false,\n            restartNeeded = true,\n            detail = error,\n        )''',
-    'runtime error parse',
-)
-
-replace_once(
-    POST,
-    '''    val zzi4RuntimeApplicable: Boolean = false,\n    val zzi4RuntimeReady: Boolean = false,\n    val detail: String = "",''',
-    '''    val zzi4RuntimeApplicable: Boolean = false,\n    val zzi4RuntimeReady: Boolean = false,\n    val zzi4RestartNeeded: Boolean = true,\n    val detail: String = "",''',
-    'post-root result restart field',
-)
-
-replace_once(
-    POST,
-    '''        var runtimeApplicable = false\n        var runtimeReady = !prepareZzi4Modules\n        var runtimeDetail = ""''',
-    '''        var runtimeApplicable = false\n        var runtimeReady = !prepareZzi4Modules\n        var runtimeRestartNeeded = true\n        var runtimeDetail = ""''',
-    'post-root runtime state vars',
-)
-
-replace_once(
-    POST,
-    '''            runtimeApplicable = runtime.applicable\n            runtimeReady = runtime.ready\n            runtimeDetail = runtime.detail''',
-    '''            runtimeApplicable = runtime.applicable\n            runtimeReady = runtime.ready\n            runtimeRestartNeeded = runtime.restartNeeded\n            runtimeDetail = runtime.detail''',
-    'post-root runtime assignment',
-)
-
-# Every result emitted after runtime evaluation carries restartNeeded. The early
-# failure results before parsing can keep the default true.
-post = POST.read_text(encoding='utf-8')
-post = post.replace(
-    '''                zzi4RuntimeReady = runtimeReady,\n                detail = runtimeDetail.ifBlank { "post-root automation complete" },''',
-    '''                zzi4RuntimeReady = runtimeReady,\n                zzi4RestartNeeded = runtimeRestartNeeded,\n                detail = runtimeDetail.ifBlank { "post-root automation complete" },''',
-)
-post = post.replace(
-    '''                zzi4RuntimeReady = runtimeReady,\n                detail = "kernel boot id unavailable before KernelSU soft reboot",''',
-    '''                zzi4RuntimeReady = runtimeReady,\n                zzi4RestartNeeded = runtimeRestartNeeded,\n                detail = "kernel boot id unavailable before KernelSU soft reboot",''',
-)
-post = post.replace(
-    '''                zzi4RuntimeReady = runtimeReady,\n                detail = keeper.detail,''',
-    '''                zzi4RuntimeReady = runtimeReady,\n                zzi4RestartNeeded = runtimeRestartNeeded,\n                detail = keeper.detail,''',
-)
-post = post.replace(
-    '''            zzi4RuntimeReady = runtimeReady,\n            detail = "KernelSU native soft-reboot handoff accepted",''',
-    '''            zzi4RuntimeReady = runtimeReady,\n            zzi4RestartNeeded = runtimeRestartNeeded,\n            detail = "KernelSU native soft-reboot handoff accepted",''',
-)
-POST.write_text(post, encoding='utf-8')
-
-replace_once(
-    INSTALL,
-    '''                        if (restartZygote && requireZzi4Runtime && postRoot?.zzi4RuntimeReady != true) {\n                            appendLog(\n                                "[!] Zygote restart skipped: " +\n                                    (postRoot?.detail ?: "ZZI4 post-root runtime could not be verified"),\n                            )\n                        } else if (restartZygote) {\n                            val restart = RootRecoveryActions.restartZygote(app)''',
-    '''                        if (restartZygote && requireZzi4Runtime && postRoot?.zzi4RuntimeReady != true) {\n                            appendLog(\n                                "[!] Zygote restart skipped: " +\n                                    (postRoot?.detail ?: "ZZI4 post-root runtime could not be verified"),\n                            )\n                        } else if (\n                            restartZygote && requireZzi4Runtime &&\n                            postRoot?.zzi4RuntimeApplicable == true &&\n                            !postRoot.zzi4RestartNeeded\n                        ) {\n                            appendLog(\n                                "[+] Zygote restart not needed: LSPosed is already mapped in system_server",\n                            )\n                        } else if (restartZygote) {\n                            val restart = RootRecoveryActions.restartZygote(\n                                app,\n                                oncePerBoot = requireZzi4Runtime,\n                            )''',
-    'manual restart decision',
-)
-
-replace_once(
-    AUTO,
-    '''                if (restartZygote && requireZzi4Runtime && postRoot?.zzi4RuntimeReady != true) {\n                    val detail = postRoot?.detail ?: "ZZI4 post-root runtime could not be verified"\n                    val message = "KernelSU root is active; Zygote restart skipped: ${detail.take(180)}"\n                    appendHistory("[!] $message")\n                    finishHistory(InstallRunResult.Succeeded)\n                    Log.w(TAG, message)\n                    finishWithResult(message)\n                    return\n                }\n\n                if (restartZygote) {\n                    val restart = try {\n                        RootRecoveryActions.restartZygote(this)''',
-    '''                if (restartZygote && requireZzi4Runtime && postRoot?.zzi4RuntimeReady != true) {\n                    val detail = postRoot?.detail ?: "ZZI4 post-root runtime could not be verified"\n                    val message = "KernelSU root is active; Zygote restart skipped: ${detail.take(180)}"\n                    appendHistory("[!] $message")\n                    finishHistory(InstallRunResult.Succeeded)\n                    Log.w(TAG, message)\n                    finishWithResult(message)\n                    return\n                }\n\n                if (\n                    restartZygote && requireZzi4Runtime &&\n                    postRoot?.zzi4RuntimeApplicable == true &&\n                    !postRoot.zzi4RestartNeeded\n                ) {\n                    val message = "KernelSU root is active; Zygote restart not needed: LSPosed is already mapped in system_server"\n                    appendHistory("[+] $message")\n                    finishHistory(InstallRunResult.Succeeded)\n                    Log.i(TAG, message)\n                    finishWithResult(message)\n                    return\n                }\n\n                if (restartZygote) {\n                    val restart = try {\n                        RootRecoveryActions.restartZygote(\n                            this,\n                            oncePerBoot = requireZzi4Runtime,\n                        )''',
-    'auto restart decision',
+    RECOVERY,
+    '''            BOOT_MARKER='/data/local/tmp/.rmg-auto-zygote-restart-boot'\n            current_boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }\n            publish_handoff() {''',
+    '''            BOOT_MARKER='/data/local/tmp/.rmg-auto-zygote-restart-boot'\n            POST_STATUS='/data/local/tmp/.rmg-zzi4-postrestart-status'\n            OLD_SS="${'$'}(pidof system_server 2>/dev/null)"\n            current_boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }\n            publish_post_status() {\n                printf '%s\\n' "${'$'}1" > "${'$'}POST_STATUS" 2>/dev/null || true\n                chmod 0666 "${'$'}POST_STATUS" 2>/dev/null || true\n            }\n            publish_handoff() {''',
+    'restart header',
 )
 
 replace_once(
     RECOVERY,
-    '''    suspend fun restartZygote(context: Context): RootRecoveryResult = withContext(Dispatchers.IO) {''',
-    '''    suspend fun restartZygote(\n        context: Context,\n        oncePerBoot: Boolean = false,\n    ): RootRecoveryResult = withContext(Dispatchers.IO) {''',
-    'restart signature',
+    '''            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then\n                [ "${'$'}(cat "${'$'}BOOT_MARKER" 2>/dev/null)" != "${'$'}EXPECTED_BOOT" ] || \\\n                    reject_handoff 'restart-already-performed-this-boot'\n                printf '%s\\n' "${'$'}EXPECTED_BOOT" > "${'$'}BOOT_MARKER" || \\\n                    reject_handoff 'restart-boot-marker-write-failed'\n                chmod 0666 "${'$'}BOOT_MARKER" 2>/dev/null || true\n            fi\n\n            if [ "${'$'}(getprop init.svc.zygote_secondary 2>/dev/null)" = "running" ]; then\n                setprop ctl.restart zygote_secondary || reject_handoff 'zygote-secondary-restart-failed'\n            fi\n\n            # Do not report success merely because this detached shell forked.''',
+    '''            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then\n                [ "${'$'}(cat "${'$'}BOOT_MARKER" 2>/dev/null)" != "${'$'}EXPECTED_BOOT" ] || \\\n                    reject_handoff 'restart-already-performed-this-boot'\n                rm -f -- "${'$'}POST_STATUS" 2>/dev/null || true\n            fi\n\n            if [ "${'$'}(getprop init.svc.zygote_secondary 2>/dev/null)" = "running" ]; then\n                setprop ctl.restart zygote_secondary || reject_handoff 'zygote-secondary-restart-failed'\n            fi\n\n            # Commit the once-per-boot marker only after the child-side restart\n            # prerequisites above succeed, so a failed secondary restart does not\n            # poison the boot and suppress a later automatic recovery attempt.\n            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then\n                printf '%s\\n' "${'$'}EXPECTED_BOOT" > "${'$'}BOOT_MARKER" || \\\n                    reject_handoff 'restart-boot-marker-write-failed'\n                chmod 0666 "${'$'}BOOT_MARKER" 2>/dev/null || true\n            fi\n\n            # Do not report success merely because this detached shell forked.''',
+    'restart marker ordering',
 )
 
 replace_once(
     RECOVERY,
-    '''        val acceptedPath = "/data/local/tmp/.rmg-restart-zygote-accepted-$token"\n        val acceptedMarker = "RMG_ZYGOTE_RESTART_ACCEPTED"\n        val script = """''',
-    '''        val acceptedPath = "/data/local/tmp/.rmg-restart-zygote-accepted-$token"\n        val acceptedMarker = "RMG_ZYGOTE_RESTART_ACCEPTED"\n        val oncePerBootFlag = if (oncePerBoot) "1" else "0"\n        val script = """''',
-    'restart flag variable',
+    '''            sleep 0.75\n            rm -f -- "${'$'}0"\n            setprop ctl.restart zygote\n        """.trimIndent() + "\\n"''',
+    '''            sleep 0.75\n            rm -f -- "${'$'}0"\n            if ! setprop ctl.restart zygote; then\n                if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then\n                    rm -f -- "${'$'}BOOT_MARKER" 2>/dev/null || true\n                    publish_post_status 'RMG_ZZI4_POST_RESTART_ERROR reason=zygote-restart-command-failed'\n                fi\n                exit 0\n            fi\n\n            # Automatic ZZI4 recovery survives the framework restart in this\n            # detached root shell and verifies the newly-created system_server.\n            # Mapping the LSPosed Zygisk library is the hard success criterion;\n            # LSPosedBridge in logcat is recorded as an additional diagnostic.\n            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then\n                i=0\n                while [ "${'$'}i" -lt 40 ]; do\n                    if [ "${'$'}(current_boot)" != "${'$'}EXPECTED_BOOT" ]; then\n                        publish_post_status 'RMG_ZZI4_POST_RESTART_ERROR reason=boot-changed'\n                        exit 0\n                    fi\n                    NEW_SS="${'$'}(pidof system_server 2>/dev/null)"\n                    if [ -n "${'$'}NEW_SS" ] && [ "${'$'}NEW_SS" != "${'$'}OLD_SS" ]; then\n                        if grep -Fq \\\n                            '/data/adb/modules/zygisk_lsposed/zygisk/arm64-v8a.so' \\\n                            "/proc/${'$'}NEW_SS/maps" 2>/dev/null; then\n                            BRIDGE=0\n                            if logcat -d -b all -v threadtime 2>/dev/null | grep -Fq 'LSPosedBridge'; then\n                                BRIDGE=1\n                            fi\n                            publish_post_status \\\n                                "RMG_ZZI4_POST_RESTART_OK system_server=${'$'}NEW_SS lsposed_map=1 bridge=${'$'}BRIDGE"\n                            echo "post-restart: LSPosed mapped in new system_server=${'$'}NEW_SS bridge=${'$'}BRIDGE"\n                            exit 0\n                        fi\n                    fi\n                    i="${'$'}((i + 1))"\n                    sleep 0.5\n                done\n                NEW_SS="${'$'}(pidof system_server 2>/dev/null)"\n                publish_post_status \\\n                    "RMG_ZZI4_POST_RESTART_ERROR reason=lsposed-map-timeout old_ss=${'$'}OLD_SS new_ss=${'$'}NEW_SS"\n                echo "post-restart: LSPosed map verification timed out old_ss=${'$'}OLD_SS new_ss=${'$'}NEW_SS"\n                dmesg 2>/dev/null | grep -E 'defex_lsposed_compat|DEFEX.*zygisk_lsposed' | tail -n 30 || true\n                logcat -d -b all -v threadtime 2>/dev/null | \\\n                    grep -E 'LSPosedBridge|LSPosedService|zygisk_lsposed|zn-daemon|zn-zygisk|dlopen' | tail -n 80 || true\n            fi\n        """.trimIndent() + "\\n"''',
+    'restart post verification',
 )
 
-replace_once(
-    RECOVERY,
-    '''            ACCEPTED_VALUE=${shellQuote(acceptedMarker)}\n            current_boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }''',
-    '''            ACCEPTED_VALUE=${shellQuote(acceptedMarker)}\n            ONCE_PER_BOOT=${shellQuote('${oncePerBootFlag}')}\n            BOOT_MARKER='/data/local/tmp/.rmg-auto-zygote-restart-boot'\n            current_boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }''',
-    'restart script vars',
-)
-# The literal above intentionally contains ${oncePerBootFlag} for Kotlin interpolation.
+t = TEST.read_text(encoding='utf-8')
+anchor = '''        assertTrue(recovery.contains("restart-already-performed-this-boot"))\n        assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))'''
+replacement = '''        assertTrue(recovery.contains("restart-already-performed-this-boot"))\n        assertTrue(recovery.contains(".rmg-zzi4-postrestart-status"))\n        assertTrue(recovery.contains("RMG_ZZI4_POST_RESTART_OK"))\n        assertTrue(recovery.contains("lsposed-map-timeout"))\n        val secondary = recovery.indexOf("setprop ctl.restart zygote_secondary")\n        val markerWrite = recovery.indexOf("EXPECTED_BOOT\\\" > \\\"${'$'}BOOT_MARKER")\n        assertTrue(secondary >= 0)\n        assertTrue(markerWrite > secondary)\n        assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))'''
+if t.count(anchor) != 1:
+    raise SystemExit('runtime test anchor changed')
+TEST.write_text(t.replace(anchor, replacement, 1), encoding='utf-8')
 
-replace_once(
-    RECOVERY,
-    '''            [ "${'$'}(id -u 2>/dev/null)" = "0" ] || reject_handoff 'not-root'\n            [ "${'$'}(current_boot)" = "${'$'}EXPECTED_BOOT" ] || reject_handoff 'boot-changed'\n            [ "${'$'}(getprop init.svc.zygote 2>/dev/null)" = "running" ] || reject_handoff 'zygote-not-running'\n\n            if [ "${'$'}(getprop init.svc.zygote_secondary 2>/dev/null)" = "running" ]; then''',
-    '''            [ "${'$'}(id -u 2>/dev/null)" = "0" ] || reject_handoff 'not-root'\n            [ "${'$'}(current_boot)" = "${'$'}EXPECTED_BOOT" ] || reject_handoff 'boot-changed'\n            [ "${'$'}(getprop init.svc.zygote 2>/dev/null)" = "running" ] || reject_handoff 'zygote-not-running'\n\n            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then\n                [ "${'$'}(cat "${'$'}BOOT_MARKER" 2>/dev/null)" != "${'$'}EXPECTED_BOOT" ] || \\\n                    reject_handoff 'restart-already-performed-this-boot'\n                printf '%s\\n' "${'$'}EXPECTED_BOOT" > "${'$'}BOOT_MARKER" || \\\n                    reject_handoff 'restart-boot-marker-write-failed'\n                chmod 0666 "${'$'}BOOT_MARKER" 2>/dev/null || true\n            fi\n\n            if [ "${'$'}(getprop init.svc.zygote_secondary 2>/dev/null)" = "running" ]; then''',
-    'restart once-per-boot guard',
-)
-
-# Update and extend the existing tests.
-test = TEST.read_text(encoding='utf-8')
-test = test.replace(
-    '''        assertTrue(command.contains("zygisk_lsposed"))\n        assertFalse(command.contains("pidof zygiskd"))''',
-    '''        assertTrue(command.contains("zygisk_lsposed"))\n        assertTrue(command.contains("/proc/$SS/maps"))\n        assertTrue(command.contains("restart_needed="))\n        assertFalse(command.contains("pidof zygiskd"))''',
-)
-test = test.replace(
-    '''        val ready = Zzi4PostRootRuntime.parse(\n            0,\n            "RMG_ZZI4_POST_ROOT_READY memory_type=0 linker=0 zn_daemon=1 module=zygisk_lsposed lspd=1",\n        )\n        assertTrue(ready.applicable)\n        assertTrue(ready.ready)''',
-    '''        val ready = Zzi4PostRootRuntime.parse(\n            0,\n            "RMG_ZZI4_POST_ROOT_READY memory_type=0 linker=0 zn_daemon=1 module=zygisk_lsposed lspd=1 restart_needed=1",\n        )\n        assertTrue(ready.applicable)\n        assertTrue(ready.ready)\n        assertTrue(ready.restartNeeded)\n\n        val alreadyInjected = Zzi4PostRootRuntime.parse(\n            0,\n            "RMG_ZZI4_POST_ROOT_READY memory_type=0 linker=0 zn_daemon=1 module=zygisk_lsposed lspd=1 restart_needed=0",\n        )\n        assertTrue(alreadyInjected.applicable)\n        assertTrue(alreadyInjected.ready)\n        assertFalse(alreadyInjected.restartNeeded)''',
-)
-test = test.replace(
-    '''        assertFalse(skipped.applicable)\n        assertTrue(skipped.ready)''',
-    '''        assertFalse(skipped.applicable)\n        assertTrue(skipped.ready)\n        assertTrue(skipped.restartNeeded)''',
-)
-test = test.replace(
-    '''        assertTrue(failed.applicable)\n        assertFalse(failed.ready)\n        assertTrue(failed.detail.contains("zn-daemon-not-ready"))''',
-    '''        assertTrue(failed.applicable)\n        assertFalse(failed.ready)\n        assertTrue(failed.restartNeeded)\n        assertTrue(failed.detail.contains("zn-daemon-not-ready"))''',
-)
-test = test.replace(
-    '''        assertTrue(auto.contains("postRoot?.zzi4RuntimeReady != true"))\n        assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))''',
-    '''        assertTrue(auto.contains("postRoot?.zzi4RuntimeReady != true"))\n        assertTrue(manual.contains("!postRoot.zzi4RestartNeeded"))\n        assertTrue(auto.contains("!postRoot.zzi4RestartNeeded"))\n        assertTrue(manual.contains("oncePerBoot = requireZzi4Runtime"))\n        assertTrue(auto.contains("oncePerBoot = requireZzi4Runtime"))\n        val recovery = File("src/main/java/dev/busung/s25uroot/RootRecoveryActions.kt").readText()\n        assertTrue(recovery.contains("oncePerBoot: Boolean = false"))\n        assertTrue(recovery.contains(".rmg-auto-zygote-restart-boot"))\n        assertTrue(recovery.contains("restart-already-performed-this-boot"))\n        assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))''',
-)
-TEST.write_text(test, encoding='utf-8')
-
-print('ZZI4 post-root final idempotency patch applied')
+print('Detached ZZI4 post-restart verification patch applied')
