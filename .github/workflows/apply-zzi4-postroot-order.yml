@@ -19,44 +19,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply ZZI4 post-root ordering patch
+      - name: Apply final ZZI4 post-root idempotency patch
         run: |
           set -euo pipefail
-          python3 tools/apply-zzi4-postroot-order.py
+          python3 tools/apply-zzi4-postroot-finalize.py
           python3 - <<'PY'
           from pathlib import Path
 
-          # Keep Auto Root's remote ksud verification byte-for-byte equivalent
-          # to the already compiled Manual implementation. The one-shot patcher
-          # intentionally emits this block through Python, so normalize the
-          # Kotlin/shell escaping here before compilation.
-          p = Path('app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt')
+          # Normalize two generator-only escaping details before Kotlin compile.
+          p = Path('app/src/main/java/dev/busung/s25uroot/RootRecoveryActions.kt')
           s = p.read_text()
-          start = s.index('    private fun zzi4KernelSuVerifyCommand(): String =')
-          end = s.index('\n\n    private fun verifyZzi4KernelSuPreStage(', start)
-          replacement = r'''    private fun zzi4KernelSuVerifyCommand(): String =
-              "set -e; " +
-                  "h=$(/system/bin/toybox sha256sum ${shellQuote(KSUD_PATH)} | " +
-                  "/system/bin/toybox awk '{print \$1}'); " +
-                  "s=$(/system/bin/toybox wc -c < ${shellQuote(KSUD_PATH)}); " +
-                  "printf '%s %s\\n' \"\$h\" \"\$s\""'''
-          s = s[:start] + replacement + s[end:]
+          s = s.replace(
+              "ONCE_PER_BOOT=${shellQuote('${oncePerBootFlag}')}",
+              'ONCE_PER_BOOT=${shellQuote(oncePerBootFlag)}',
+          )
           p.write_text(s)
 
-          # Normalize the structural test: function definitions occur before
-          # execution, so measure the first module_ready invocation rather than
-          # the modules_info token inside the function definition.
           p = Path('app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt')
           s = p.read_text()
-          s = s.replace('setsid \\"$LS/daemon\\" --force', 'setsid \\"\\$LS/daemon\\" --force')
-          s = s.replace(
-              'val modules = command.indexOf("modules_info")',
-              'val modules = command.indexOf("if ! module_ready; then")',
-          )
-          s = s.replace(
-              'assertTrue(modules > linker)',
-              'assertTrue(modules > daemon)',
-          )
+          s = s.replace('command.contains("/proc/$SS/maps")', 'command.contains("/proc/\\$SS/maps")')
           p.write_text(s)
           PY
 
@@ -78,7 +59,7 @@ jobs:
             :app:lintDebug \
             :app:assembleRelease
 
-      - name: Commit validated post-root ordering
+      - name: Commit validated final post-root rules
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -88,8 +69,8 @@ jobs:
             app/src/main/java/dev/busung/s25uroot/PostRootAutomation.kt \
             app/src/main/java/dev/busung/s25uroot/InstallViewModel.kt \
             app/src/main/java/dev/busung/s25uroot/AutoRootExecutorService.kt \
-            app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt \
+            app/src/main/java/dev/busung/s25uroot/RootRecoveryActions.kt \
             app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt
           git diff --cached --check
-          git commit -m 'Gate ZZI4 Zygote restart on Zygisk and LSPosed readiness'
+          git commit -m 'Make ZZI4 post-root restart idempotent'
           git push
