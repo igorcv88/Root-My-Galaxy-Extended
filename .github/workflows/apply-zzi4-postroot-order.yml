@@ -51,3 +51,5 @@ jobs:
           git diff --cached --check
           git commit -m 'Verify LSPosed after automatic ZZI4 Zygote restart'
           git push
+
+# validation trigger: corrected structural assertion
