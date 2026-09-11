@@ -23,7 +23,10 @@ internal data class RootRecoveryResult(
 internal object RootRecoveryActions {
     const val HOLD_TO_CONFIRM_MILLIS = 1_400L
 
-    suspend fun restartZygote(context: Context): RootRecoveryResult = withContext(Dispatchers.IO) {
+    suspend fun restartZygote(
+        context: Context,
+        oncePerBoot: Boolean = false,
+    ): RootRecoveryResult = withContext(Dispatchers.IO) {
         val bootId = verifiedRootBoot(context) ?: return@withContext RootRecoveryResult(
             accepted = false,
             detail = "KernelSU root is not available for this boot",
@@ -33,11 +36,14 @@ internal object RootRecoveryActions {
         val logPath = "/data/local/tmp/rmg-restart-zygote.log"
         val acceptedPath = "/data/local/tmp/.rmg-restart-zygote-accepted-$token"
         val acceptedMarker = "RMG_ZYGOTE_RESTART_ACCEPTED"
+        val oncePerBootFlag = if (oncePerBoot) "1" else "0"
         val script = """
             #!/system/bin/sh
             EXPECTED_BOOT=${shellQuote(bootId)}
             ACCEPTED=${shellQuote(acceptedPath)}
             ACCEPTED_VALUE=${shellQuote(acceptedMarker)}
+            ONCE_PER_BOOT=${shellQuote(oncePerBootFlag)}
+            BOOT_MARKER='/data/local/tmp/.rmg-auto-zygote-restart-boot'
             current_boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
             publish_handoff() {
                 printf '%s\n' "${'$'}1" > "${'$'}ACCEPTED" || exit 79
@@ -52,6 +58,14 @@ internal object RootRecoveryActions {
             [ "${'$'}(id -u 2>/dev/null)" = "0" ] || reject_handoff 'not-root'
             [ "${'$'}(current_boot)" = "${'$'}EXPECTED_BOOT" ] || reject_handoff 'boot-changed'
             [ "${'$'}(getprop init.svc.zygote 2>/dev/null)" = "running" ] || reject_handoff 'zygote-not-running'
+
+            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then
+                [ "${'$'}(cat "${'$'}BOOT_MARKER" 2>/dev/null)" != "${'$'}EXPECTED_BOOT" ] || \
+                    reject_handoff 'restart-already-performed-this-boot'
+                printf '%s\n' "${'$'}EXPECTED_BOOT" > "${'$'}BOOT_MARKER" || \
+                    reject_handoff 'restart-boot-marker-write-failed'
+                chmod 0666 "${'$'}BOOT_MARKER" 2>/dev/null || true
+            fi
 
             if [ "${'$'}(getprop init.svc.zygote_secondary 2>/dev/null)" = "running" ]; then
                 setprop ctl.restart zygote_secondary || reject_handoff 'zygote-secondary-restart-failed'

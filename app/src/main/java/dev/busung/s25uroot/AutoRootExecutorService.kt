@@ -291,9 +291,25 @@ open class AutoRootExecutorService : Service() {
                     return
                 }
 
+                if (
+                    restartZygote && requireZzi4Runtime &&
+                    postRoot?.zzi4RuntimeApplicable == true &&
+                    !postRoot.zzi4RestartNeeded
+                ) {
+                    val message = "KernelSU root is active; Zygote restart not needed: LSPosed is already mapped in system_server"
+                    appendHistory("[+] $message")
+                    finishHistory(InstallRunResult.Succeeded)
+                    Log.i(TAG, message)
+                    finishWithResult(message)
+                    return
+                }
+
                 if (restartZygote) {
                     val restart = try {
-                        RootRecoveryActions.restartZygote(this)
+                        RootRecoveryActions.restartZygote(
+                            this,
+                            oncePerBoot = requireZzi4Runtime,
+                        )
                     } catch (error: Throwable) {
                         RootRecoveryResult(
                             accepted = false,

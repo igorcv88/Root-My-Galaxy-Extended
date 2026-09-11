@@ -27,6 +27,8 @@ class Zzi4PostRootRuntimeTest {
         assertTrue(ready > lsposed)
         assertTrue(command.contains("zn-daemon"))
         assertTrue(command.contains("zygisk_lsposed"))
+        assertTrue(command.contains("/proc/\$SS/maps"))
+        assertTrue(command.contains("restart_needed="))
         assertFalse(command.contains("pidof zygiskd"))
         assertFalse(command.contains("pidof zygiskd64"))
         assertFalse(command.contains("cat /data/adb/zygisksu/znctx"))
@@ -37,18 +39,29 @@ class Zzi4PostRootRuntimeTest {
     fun parserSeparatesReadySkippedAndFailure() {
         val ready = Zzi4PostRootRuntime.parse(
             0,
-            "RMG_ZZI4_POST_ROOT_READY memory_type=0 linker=0 zn_daemon=1 module=zygisk_lsposed lspd=1",
+            "RMG_ZZI4_POST_ROOT_READY memory_type=0 linker=0 zn_daemon=1 module=zygisk_lsposed lspd=1 restart_needed=1",
         )
         assertTrue(ready.applicable)
         assertTrue(ready.ready)
+        assertTrue(ready.restartNeeded)
+
+        val alreadyInjected = Zzi4PostRootRuntime.parse(
+            0,
+            "RMG_ZZI4_POST_ROOT_READY memory_type=0 linker=0 zn_daemon=1 module=zygisk_lsposed lspd=1 restart_needed=0",
+        )
+        assertTrue(alreadyInjected.applicable)
+        assertTrue(alreadyInjected.ready)
+        assertFalse(alreadyInjected.restartNeeded)
 
         val skipped = Zzi4PostRootRuntime.parse(0, "RMG_ZZI4_POST_ROOT_SKIP:lsposed-not-active")
         assertFalse(skipped.applicable)
         assertTrue(skipped.ready)
+        assertTrue(skipped.restartNeeded)
 
         val failed = Zzi4PostRootRuntime.parse(70, "RMG_ZZI4_POST_ROOT_ERROR:zn-daemon-not-ready")
         assertTrue(failed.applicable)
         assertFalse(failed.ready)
+        assertTrue(failed.restartNeeded)
         assertTrue(failed.detail.contains("zn-daemon-not-ready"))
     }
 
@@ -62,6 +75,14 @@ class Zzi4PostRootRuntimeTest {
         assertTrue(manual.contains("postRoot?.zzi4RuntimeReady != true"))
         assertTrue(auto.contains("prepareZzi4Modules = requireZzi4Runtime"))
         assertTrue(auto.contains("postRoot?.zzi4RuntimeReady != true"))
+        assertTrue(manual.contains("!postRoot.zzi4RestartNeeded"))
+        assertTrue(auto.contains("!postRoot.zzi4RestartNeeded"))
+        assertTrue(manual.contains("oncePerBoot = requireZzi4Runtime"))
+        assertTrue(auto.contains("oncePerBoot = requireZzi4Runtime"))
+        val recovery = File("src/main/java/dev/busung/s25uroot/RootRecoveryActions.kt").readText()
+        assertTrue(recovery.contains("oncePerBoot: Boolean = false"))
+        assertTrue(recovery.contains(".rmg-auto-zygote-restart-boot"))
+        assertTrue(recovery.contains("restart-already-performed-this-boot"))
         assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))
         assertTrue(post.contains("Zygisk/LSPosed runtime ready before Zygote restart"))
     }

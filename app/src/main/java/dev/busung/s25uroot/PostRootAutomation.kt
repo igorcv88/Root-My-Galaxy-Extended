@@ -12,6 +12,7 @@ internal data class PostRootResult(
     val shizukuStarted: Boolean = false,
     val zzi4RuntimeApplicable: Boolean = false,
     val zzi4RuntimeReady: Boolean = false,
+    val zzi4RestartNeeded: Boolean = true,
     val detail: String = "",
 )
 
@@ -276,6 +277,7 @@ internal object PostRootAutomation {
     ): PostRootResult {
         var runtimeApplicable = false
         var runtimeReady = !prepareZzi4Modules
+        var runtimeRestartNeeded = true
         var runtimeDetail = ""
         if (prepareZzi4Modules) {
             val runtimeBootId = AutoRootSupport.currentBootToken()
@@ -294,6 +296,7 @@ internal object PostRootAutomation {
             val runtime = Zzi4PostRootRuntime.parse(shellResult.exitCode, shellResult.output)
             runtimeApplicable = runtime.applicable
             runtimeReady = runtime.ready
+            runtimeRestartNeeded = runtime.restartNeeded
             runtimeDetail = runtime.detail
             if (!runtime.ready) {
                 onLog("[-] ZZI4 post-root runtime is not ready: ${runtime.detail}")
@@ -316,6 +319,7 @@ internal object PostRootAutomation {
                 shizukuStarted = shizukuStarted,
                 zzi4RuntimeApplicable = runtimeApplicable,
                 zzi4RuntimeReady = runtimeReady,
+                zzi4RestartNeeded = runtimeRestartNeeded,
                 detail = runtimeDetail.ifBlank { "post-root automation complete" },
             )
         }
@@ -326,6 +330,7 @@ internal object PostRootAutomation {
                 shizukuStarted = shizukuStarted,
                 zzi4RuntimeApplicable = runtimeApplicable,
                 zzi4RuntimeReady = runtimeReady,
+                zzi4RestartNeeded = runtimeRestartNeeded,
                 detail = "kernel boot id unavailable before KernelSU soft reboot",
             )
         }
@@ -341,6 +346,7 @@ internal object PostRootAutomation {
                 shizukuStarted = shizukuStarted,
                 zzi4RuntimeApplicable = runtimeApplicable,
                 zzi4RuntimeReady = runtimeReady,
+                zzi4RestartNeeded = runtimeRestartNeeded,
                 detail = keeper.detail,
             )
         }
@@ -355,6 +361,7 @@ internal object PostRootAutomation {
             shizukuStarted = shizukuStarted,
             zzi4RuntimeApplicable = runtimeApplicable,
             zzi4RuntimeReady = runtimeReady,
+            zzi4RestartNeeded = runtimeRestartNeeded,
             detail = "KernelSU native soft-reboot handoff accepted",
         )
     }

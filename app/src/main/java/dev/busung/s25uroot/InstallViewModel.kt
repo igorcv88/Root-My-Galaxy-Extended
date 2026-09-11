@@ -272,8 +272,19 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                                 "[!] Zygote restart skipped: " +
                                     (postRoot?.detail ?: "ZZI4 post-root runtime could not be verified"),
                             )
+                        } else if (
+                            restartZygote && requireZzi4Runtime &&
+                            postRoot?.zzi4RuntimeApplicable == true &&
+                            !postRoot.zzi4RestartNeeded
+                        ) {
+                            appendLog(
+                                "[+] Zygote restart not needed: LSPosed is already mapped in system_server",
+                            )
                         } else if (restartZygote) {
-                            val restart = RootRecoveryActions.restartZygote(app)
+                            val restart = RootRecoveryActions.restartZygote(
+                                app,
+                                oncePerBoot = requireZzi4Runtime,
+                            )
                             if (!restart.accepted) {
                                 val message = app.getString(
                                     R.string.zygote_restart_failed,

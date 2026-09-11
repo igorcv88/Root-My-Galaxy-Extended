@@ -3,6 +3,7 @@ package dev.busung.s25uroot
 internal data class Zzi4PostRootRuntimeResult(
     val applicable: Boolean,
     val ready: Boolean,
+    val restartNeeded: Boolean,
     val detail: String,
 )
 
@@ -115,6 +116,14 @@ internal object Zzi4PostRootRuntime {
             done
             lspd_ready || fail 'lsposed-daemon-not-ready'
 
+            RESTART_NEEDED=1
+            SS="${'$'}(/system/bin/pidof system_server 2>/dev/null)"
+            if [ -n "${'$'}SS" ] && /system/bin/grep -Fq \
+                '/data/adb/modules/zygisk_lsposed/zygisk/arm64-v8a.so' \
+                "/proc/${'$'}SS/maps" 2>/dev/null; then
+                RESTART_NEEDED=0
+            fi
+
             EXT='absent'
             if [ -r /sys/module/defex_lsposed_compat/parameters/bypass ]; then
                 EXT="${'$'}(/system/bin/cat /sys/module/defex_lsposed_compat/parameters/bypass 2>/dev/null)"
@@ -124,7 +133,7 @@ internal object Zzi4PostRootRuntime {
                 PERM='kernel-log-confirmed'
             fi
 
-            printf '%s\n' '$READY_MARKER memory_type=0 linker=0 zn_daemon=1 module=zygisk_lsposed lspd=1 permanent_defex='"${'$'}PERM"' external_helper='"${'$'}EXT"
+            printf '%s\n' '$READY_MARKER memory_type=0 linker=0 zn_daemon=1 module=zygisk_lsposed lspd=1 restart_needed='"${'$'}RESTART_NEEDED"' permanent_defex='"${'$'}PERM"' external_helper='"${'$'}EXT"
             exit 0
         """.trimIndent()
     }
@@ -136,6 +145,7 @@ internal object Zzi4PostRootRuntime {
             return Zzi4PostRootRuntimeResult(
                 applicable = false,
                 ready = true,
+                restartNeeded = true,
                 detail = skip.removePrefix("$SKIP_MARKER:"),
             )
         }
@@ -144,6 +154,7 @@ internal object Zzi4PostRootRuntime {
             return Zzi4PostRootRuntimeResult(
                 applicable = true,
                 ready = true,
+                restartNeeded = !ready.contains("restart_needed=0"),
                 detail = ready,
             )
         }
@@ -155,6 +166,7 @@ internal object Zzi4PostRootRuntime {
         return Zzi4PostRootRuntimeResult(
             applicable = true,
             ready = false,
+            restartNeeded = true,
             detail = error,
         )
     }
