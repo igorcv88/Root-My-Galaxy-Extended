@@ -19,36 +19,141 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply final ZZI4 post-root idempotency patch
+      - name: Apply detached ZZI4 post-restart verification
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('tools/apply-zzi4-postroot-finalize.py')
-          s = p.read_text()
-          old = "if count != 1:\n        raise SystemExit(f'{label}: expected one anchor, found {count}')"
-          new = "if count != 1 and label != 'restart script vars':\n        raise SystemExit(f'{label}: expected one anchor, found {count}')"
-          if old not in s:
-              raise SystemExit('finalizer replace_once guard changed')
-          p.write_text(s.replace(old, new, 1))
-          PY
-          python3 tools/apply-zzi4-postroot-finalize.py
-          python3 - <<'PY'
-          from pathlib import Path
 
-          # Normalize two generator-only escaping details before Kotlin compile.
-          p = Path('app/src/main/java/dev/busung/s25uroot/RootRecoveryActions.kt')
-          s = p.read_text()
-          s = s.replace(
-              "ONCE_PER_BOOT=${shellQuote('${oncePerBootFlag}')}",
-              'ONCE_PER_BOOT=${shellQuote(oncePerBootFlag)}',
-          )
-          p.write_text(s)
+          recovery = Path('app/src/main/java/dev/busung/s25uroot/RootRecoveryActions.kt')
+          test = Path('app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt')
 
-          p = Path('app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt')
-          s = p.read_text()
-          s = s.replace('command.contains("/proc/$SS/maps")', 'command.contains("/proc/\\$SS/maps")')
-          p.write_text(s)
+          s = recovery.read_text()
+
+          old = '''            BOOT_MARKER='/data/local/tmp/.rmg-auto-zygote-restart-boot'
+            current_boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
+            publish_handoff() {'''
+          new = '''            BOOT_MARKER='/data/local/tmp/.rmg-auto-zygote-restart-boot'
+            POST_STATUS='/data/local/tmp/.rmg-zzi4-postrestart-status'
+            OLD_SS="${'$'}(pidof system_server 2>/dev/null)"
+            current_boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null; }
+            publish_post_status() {
+                printf '%s\\n' "${'$'}1" > "${'$'}POST_STATUS" 2>/dev/null || true
+                chmod 0666 "${'$'}POST_STATUS" 2>/dev/null || true
+            }
+            publish_handoff() {'''
+          if s.count(old) != 1:
+              raise SystemExit('restart header anchor changed')
+          s = s.replace(old, new, 1)
+
+          old = '''            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then
+                [ "${'$'}(cat "${'$'}BOOT_MARKER" 2>/dev/null)" != "${'$'}EXPECTED_BOOT" ] || \\
+                    reject_handoff 'restart-already-performed-this-boot'
+                printf '%s\\n' "${'$'}EXPECTED_BOOT" > "${'$'}BOOT_MARKER" || \\
+                    reject_handoff 'restart-boot-marker-write-failed'
+                chmod 0666 "${'$'}BOOT_MARKER" 2>/dev/null || true
+            fi
+
+            if [ "${'$'}(getprop init.svc.zygote_secondary 2>/dev/null)" = "running" ]; then
+                setprop ctl.restart zygote_secondary || reject_handoff 'zygote-secondary-restart-failed'
+            fi
+
+            # Do not report success merely because this detached shell forked.'''
+          new = '''            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then
+                [ "${'$'}(cat "${'$'}BOOT_MARKER" 2>/dev/null)" != "${'$'}EXPECTED_BOOT" ] || \\
+                    reject_handoff 'restart-already-performed-this-boot'
+                rm -f -- "${'$'}POST_STATUS" 2>/dev/null || true
+            fi
+
+            if [ "${'$'}(getprop init.svc.zygote_secondary 2>/dev/null)" = "running" ]; then
+                setprop ctl.restart zygote_secondary || reject_handoff 'zygote-secondary-restart-failed'
+            fi
+
+            # Commit the once-per-boot marker only after all child-side restart
+            # prerequisites above have succeeded. A failed secondary restart must
+            # not poison the boot and suppress a later automatic recovery attempt.
+            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then
+                printf '%s\\n' "${'$'}EXPECTED_BOOT" > "${'$'}BOOT_MARKER" || \\
+                    reject_handoff 'restart-boot-marker-write-failed'
+                chmod 0666 "${'$'}BOOT_MARKER" 2>/dev/null || true
+            fi
+
+            # Do not report success merely because this detached shell forked.'''
+          if s.count(old) != 1:
+              raise SystemExit('restart marker block anchor changed')
+          s = s.replace(old, new, 1)
+
+          old = '''            sleep 0.75
+            rm -f -- "${'$'}0"
+            setprop ctl.restart zygote
+        """.trimIndent() + "\\n"'''
+          new = '''            sleep 0.75
+            rm -f -- "${'$'}0"
+            if ! setprop ctl.restart zygote; then
+                if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then
+                    rm -f -- "${'$'}BOOT_MARKER" 2>/dev/null || true
+                    publish_post_status 'RMG_ZZI4_POST_RESTART_ERROR reason=zygote-restart-command-failed'
+                fi
+                exit 0
+            fi
+
+            # Automatic ZZI4 recovery survives the framework restart in this
+            # detached root shell and verifies the newly-created system_server.
+            # Mapping the LSPosed Zygisk library is the hard success criterion;
+            # LSPosedBridge in logcat is captured as an additional diagnostic.
+            if [ "${'$'}ONCE_PER_BOOT" = "1" ]; then
+                i=0
+                while [ "${'$'}i" -lt 40 ]; do
+                    if [ "${'$'}(current_boot)" != "${'$'}EXPECTED_BOOT" ]; then
+                        publish_post_status 'RMG_ZZI4_POST_RESTART_ERROR reason=boot-changed'
+                        exit 0
+                    fi
+                    NEW_SS="${'$'}(pidof system_server 2>/dev/null)"
+                    if [ -n "${'$'}NEW_SS" ] && [ "${'$'}NEW_SS" != "${'$'}OLD_SS" ]; then
+                        if grep -Fq \\
+                            '/data/adb/modules/zygisk_lsposed/zygisk/arm64-v8a.so' \\
+                            "/proc/${'$'}NEW_SS/maps" 2>/dev/null; then
+                            BRIDGE=0
+                            if logcat -d -b all -v threadtime 2>/dev/null | grep -Fq 'LSPosedBridge'; then
+                                BRIDGE=1
+                            fi
+                            publish_post_status \\
+                                "RMG_ZZI4_POST_RESTART_OK system_server=${'$'}NEW_SS lsposed_map=1 bridge=${'$'}BRIDGE"
+                            echo "post-restart: LSPosed mapped in new system_server=${'$'}NEW_SS bridge=${'$'}BRIDGE"
+                            exit 0
+                        fi
+                    fi
+                    i="${'$'}((i + 1))"
+                    sleep 0.5
+                done
+                NEW_SS="${'$'}(pidof system_server 2>/dev/null)"
+                publish_post_status \\
+                    "RMG_ZZI4_POST_RESTART_ERROR reason=lsposed-map-timeout old_ss=${'$'}OLD_SS new_ss=${'$'}NEW_SS"
+                echo "post-restart: LSPosed map verification timed out old_ss=${'$'}OLD_SS new_ss=${'$'}NEW_SS"
+                dmesg 2>/dev/null | grep -E 'defex_lsposed_compat|DEFEX.*zygisk_lsposed' | tail -n 30 || true
+                logcat -d -b all -v threadtime 2>/dev/null | \\
+                    grep -E 'LSPosedBridge|LSPosedService|zygisk_lsposed|zn-daemon|zn-zygisk|dlopen' | tail -n 80 || true
+            fi
+        """.trimIndent() + "\\n"'''
+          if s.count(old) != 1:
+              raise SystemExit('restart tail anchor changed')
+          recovery.write_text(s.replace(old, new, 1))
+
+          t = test.read_text()
+          anchor = '''        assertTrue(recovery.contains("restart-already-performed-this-boot"))
+        assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))'''
+          replacement = '''        assertTrue(recovery.contains("restart-already-performed-this-boot"))
+        assertTrue(recovery.contains(".rmg-zzi4-postrestart-status"))
+        assertTrue(recovery.contains("RMG_ZZI4_POST_RESTART_OK"))
+        assertTrue(recovery.contains("lsposed-map-timeout"))
+        val secondary = recovery.indexOf("setprop ctl.restart zygote_secondary")
+        val markerWrite = recovery.indexOf("EXPECTED_BOOT\" > \"${'$'}BOOT_MARKER")
+        assertTrue(secondary >= 0)
+        assertTrue(markerWrite > secondary)
+        assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))'''
+          if t.count(anchor) != 1:
+              raise SystemExit('runtime test anchor changed')
+          test.write_text(t.replace(anchor, replacement, 1))
           PY
 
       - name: Java 21
@@ -69,18 +174,14 @@ jobs:
             :app:lintDebug \
             :app:assembleRelease
 
-      - name: Commit validated final post-root rules
+      - name: Commit validated detached post-restart verification
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
-            app/src/main/java/dev/busung/s25uroot/Zzi4PostRootRuntime.kt \
-            app/src/main/java/dev/busung/s25uroot/PostRootAutomation.kt \
-            app/src/main/java/dev/busung/s25uroot/InstallViewModel.kt \
-            app/src/main/java/dev/busung/s25uroot/AutoRootExecutorService.kt \
             app/src/main/java/dev/busung/s25uroot/RootRecoveryActions.kt \
             app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt
           git diff --cached --check
-          git commit -m 'Make ZZI4 post-root restart idempotent'
+          git commit -m 'Verify LSPosed after automatic ZZI4 Zygote restart'
           git push
