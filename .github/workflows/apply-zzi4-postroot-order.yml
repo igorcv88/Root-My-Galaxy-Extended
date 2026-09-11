@@ -1,0 +1,67 @@
+name: Apply ZZI4 post-root ordering
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-zzi4-postroot-order.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Apply ZZI4 post-root ordering patch
+        run: |
+          set -euo pipefail
+          python3 tools/apply-zzi4-postroot-order.py
+          # Escape the shell variable spelling inside the Kotlin structural test.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt')
+          s = p.read_text()
+          s = s.replace('setsid \\"$LS/daemon\\" --force', 'setsid \\"\\$LS/daemon\\" --force')
+          p.write_text(s)
+          PY
+
+      - name: Java 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle cache
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Test, lint and assemble release
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --build-cache \
+            :app:testDebugUnitTest \
+            :app:lintDebug \
+            :app:assembleRelease
+
+      - name: Commit validated post-root ordering
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            app/src/main/java/dev/busung/s25uroot/Zzi4PostRootRuntime.kt \
+            app/src/main/java/dev/busung/s25uroot/PostRootAutomation.kt \
+            app/src/main/java/dev/busung/s25uroot/InstallViewModel.kt \
+            app/src/main/java/dev/busung/s25uroot/AutoRootExecutorService.kt \
+            app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt \
+            app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt
+          git diff --cached --check
+          git commit -m 'Gate ZZI4 Zygote restart on Zygisk and LSPosed readiness'
+          git push
