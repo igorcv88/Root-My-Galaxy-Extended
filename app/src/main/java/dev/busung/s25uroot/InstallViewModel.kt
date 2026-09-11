@@ -50,6 +50,17 @@ data class TargetCatalogUiState(
 
 private data class CommandResult(val code: Int, val output: String)
 
+internal fun remoteArtifactMatches(
+    output: String,
+    expectedSha256: String,
+    expectedSize: Long,
+): Boolean {
+    val fields = output.trim().split(Regex("\\s+"))
+    return fields.size >= 2 &&
+        fields[0].equals(expectedSha256, ignoreCase = true) &&
+        fields[1].toLongOrNull() == expectedSize
+}
+
 internal enum class ManualRunTransport {
     App,
     Shizuku,
@@ -326,6 +337,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun runExploitAndKernelSu(payloads: VerifiedPayloads) {
         if (runTransport() != ManualRunTransport.LocalAdb) {
+            preStageKernelSuForAutoLateLoad(payloads)
             setPhase(InstallPhase.Exploiting, app.getString(R.string.status_exploit_running))
             executeExploit(payloads.exploit, payloads.profile.routePolicy)
             setPhase(InstallPhase.LoadingKernelSu, app.getString(R.string.status_ksu_loading))
@@ -354,6 +366,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 appendLog("[+] Manual Local ADB shell transport ready: u:r:shell:s0")
                 activeLocalAdbSession = session
                 try {
+                    preStageKernelSuForAutoLateLoad(payloads)
                     setPhase(InstallPhase.Exploiting, app.getString(R.string.status_exploit_running))
                     executeExploit(payloads.exploit, payloads.profile.routePolicy)
                     setPhase(InstallPhase.LoadingKernelSu, app.getString(R.string.status_ksu_loading))
@@ -363,6 +376,60 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
         }
+    }
+
+    private fun preStageKernelSuForAutoLateLoad(payloads: VerifiedPayloads) {
+        if (payloads.profile.profileId != "pa3q-S938BXXUCZZI4") return
+
+        val artifact = payloads.profile.kernelSu.artifact
+        val expectedSha256 = artifact.sha256
+        val expectedSize = artifact.size
+        val verifyCommand =
+            "set -e; " +
+                "h=$(/system/bin/toybox sha256sum ${shellQuote(SHIZUKU_KSUD_PATH)} | " +
+                "/system/bin/toybox awk '{print \$1}'); " +
+                "s=$(/system/bin/toybox wc -c < ${shellQuote(SHIZUKU_KSUD_PATH)}); " +
+                "printf '%s %s\\n' \"\$h\" \"\$s\""
+
+        val verification = when (runTransport()) {
+            ManualRunTransport.LocalAdb -> {
+                val session = requireNotNull(activeLocalAdbSession) {
+                    "Manual Local ADB session disappeared before KernelSU pre-stage"
+                }
+                session.remove(SHIZUKU_KSUD_STAGE_PATH)
+                session.push(payloads.kernelSu, SHIZUKU_KSUD_PATH, executable = true)
+                session.shell(verifyCommand)
+            }
+            ManualRunTransport.Shizuku -> {
+                val cleanup = ShizukuController.shell(
+                    "rm -f ${shellQuote(SHIZUKU_KSUD_STAGE_PATH)}",
+                )
+                require(cleanup.exitCode == 0) {
+                    "Unable to clear stale KernelSU stage before ZZI4 exploit: ${cleanup.output}"
+                }
+                ShizukuController.writeFile(
+                    SHIZUKU_KSUD_PATH,
+                    "755",
+                    payloads.kernelSu.inputStream(),
+                )
+                ShizukuController.shell(verifyCommand)
+            }
+            ManualRunTransport.App -> {
+                error("ZZI4 KernelSU pre-stage requires a real shell transport")
+            }
+        }
+
+        require(
+            verification.exitCode == 0 &&
+                remoteArtifactMatches(verification.output, expectedSha256, expectedSize),
+        ) {
+            "ZZI4 KernelSU pre-stage verification failed: expected=" +
+                "$expectedSha256/$expectedSize remote=${verification.output.takeLast(240)}"
+        }
+        appendLog(
+            "[+] ZZI4 pre-exploit KernelSU bootstrap verified " +
+                "sha256=$expectedSha256 size=$expectedSize",
+        )
     }
 
     private suspend fun executeExploit(payload: File, policy: ExploitRoutePolicy) {
