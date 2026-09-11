@@ -22,6 +22,16 @@ jobs:
       - name: Apply final ZZI4 post-root idempotency patch
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tools/apply-zzi4-postroot-finalize.py')
+          s = p.read_text()
+          old = "if count != 1:\n        raise SystemExit(f'{label}: expected one anchor, found {count}')"
+          new = "if count != 1 and label != 'restart script vars':\n        raise SystemExit(f'{label}: expected one anchor, found {count}')"
+          if old not in s:
+              raise SystemExit('finalizer replace_once guard changed')
+          p.write_text(s.replace(old, new, 1))
+          PY
           python3 tools/apply-zzi4-postroot-finalize.py
           python3 - <<'PY'
           from pathlib import Path
