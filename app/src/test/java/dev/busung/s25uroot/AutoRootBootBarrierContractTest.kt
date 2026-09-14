@@ -14,13 +14,16 @@ class AutoRootBootBarrierContractTest {
     }
 
     @Test
-    fun zzi4PriorityShizukuBootstrapStartsBeforeAutoRootForegroundGate() {
+    fun priorityShizukuOwnershipIsChosenBeforeAutoRootForegroundGate() {
         val receiver = source("AutoRootBootReceiver.kt")
-        val priorityBootstrap = receiver.indexOf("ShizukuBootService.startForAutoRoot(context)")
+        val ownershipDecision = receiver.indexOf(
+            "launchBootShizuku(context, autoRootPriority = autoRootOwnsShizuku)",
+        )
         val gateStart = receiver.indexOf("context.startForegroundService(")
 
-        assertTrue(priorityBootstrap >= 0)
-        assertTrue(gateStart > priorityBootstrap)
+        assertTrue(receiver.contains("AppPreferences.shizukuBootRequiredByAutoRoot(context)"))
+        assertTrue(ownershipDecision >= 0)
+        assertTrue(gateStart > ownershipDecision)
     }
 
     @Test
