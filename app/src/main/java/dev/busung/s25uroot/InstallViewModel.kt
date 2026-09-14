@@ -408,11 +408,10 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         val expectedSha256 = artifact.sha256
         val expectedSize = artifact.size
         val verifyCommand =
-            "set -e; " +
-                "h=$(/system/bin/toybox sha256sum ${shellQuote(SHIZUKU_KSUD_PATH)} | " +
-                "/system/bin/toybox awk '{print \$1}'); " +
-                "s=$(/system/bin/toybox wc -c < ${shellQuote(SHIZUKU_KSUD_PATH)}); " +
-                "printf '%s %s\\n' \"\$h\" \"\$s\""
+    "set -e; " +
+        "/system/bin/toybox sha256sum ${shellQuote(SHIZUKU_KSUD_PATH)} | " +
+        "/system/bin/toybox cut -d ' ' -f 1; " +
+        "/system/bin/toybox wc -c < ${shellQuote(SHIZUKU_KSUD_PATH)}"
 
         val verification = when (runTransport()) {
             ManualRunTransport.LocalAdb -> {
