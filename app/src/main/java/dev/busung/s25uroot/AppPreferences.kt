@@ -39,7 +39,6 @@ object AppPreferences {
     // post-root KernelSU soft reboot for manual installs. Auto Root never consumes
     // this preference automatically; it offers soft reboot as a notification action.
     private const val RESTART_ZYGOTE_AFTER_ROOT = "soft_reboot_after_root"
-    private const val AUTO_START_SHIZUKU_AFTER_ROOT = "auto_start_shizuku_after_root"
     private const val START_SHIZUKU_ON_BOOT = "start_shizuku_on_boot"
     private const val SHIZUKU_AUTOMATION_TOKEN = "shizuku_automation_token"
     private const val ADB_PAIRED = "adb_paired"
@@ -99,17 +98,24 @@ object AppPreferences {
         prefs(context).edit().putBoolean(RESTART_ZYGOTE_AFTER_ROOT, enabled).apply()
     }
 
-    fun autoStartShizukuAfterRoot(context: Context): Boolean =
-        prefs(context).getBoolean(AUTO_START_SHIZUKU_AFTER_ROOT, true)
+    /**
+     * Legacy compatibility shim. Shizuku startup is coordinated before Auto Root
+     * when a shell transport is required. Repeating it after root caused duplicate
+     * starts and notifications whenever the server was already alive but Binder
+     * delivery to RMG lagged behind.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun autoStartShizukuAfterRoot(context: Context): Boolean = false
 
-    fun setAutoStartShizukuAfterRoot(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(AUTO_START_SHIZUKU_AFTER_ROOT, enabled).apply()
-    }
+    /** Kept only so older source callers do not need an immediate API migration. */
+    @Suppress("UNUSED_PARAMETER")
+    fun setAutoStartShizukuAfterRoot(context: Context, enabled: Boolean) = Unit
 
     /**
      * Independent pre-root boot bootstrap. Default off so an existing Shizuku,
      * Tasker, or other boot starter remains the single owner until the user opts
-     * in to RMG's redundant coordinator explicitly.
+     * in to RMG's redundant coordinator explicitly. Auto Root may still request
+     * its priority bootstrap when the selected target requires shell transport.
      */
     fun startShizukuOnBoot(context: Context): Boolean =
         prefs(context).getBoolean(START_SHIZUKU_ON_BOOT, false)
