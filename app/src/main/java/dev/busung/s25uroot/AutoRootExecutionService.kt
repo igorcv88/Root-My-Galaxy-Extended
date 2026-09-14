@@ -257,6 +257,10 @@ class AutoRootExecutionService : Service() {
         if (shuttingDown) return
         shuttingDown = true
         getSystemService(NotificationManager::class.java).apply {
+            // AutoRootExecutorService still publishes legacy stage progress under
+            // 43499. Clear that terminally so "Verifying KernelSU…" cannot be
+            // orphaned after the split execution service posts the final result.
+            cancel(AUTO_ROOT_NOTIFICATION_ID)
             cancel(EXECUTION_NOTIFICATION_ID)
             notify(
                 RESULT_NOTIFICATION_ID,
@@ -270,7 +274,10 @@ class AutoRootExecutionService : Service() {
     private fun stopWithoutResult() {
         if (shuttingDown) return
         shuttingDown = true
-        getSystemService(NotificationManager::class.java).cancel(EXECUTION_NOTIFICATION_ID)
+        getSystemService(NotificationManager::class.java).apply {
+            cancel(AUTO_ROOT_NOTIFICATION_ID)
+            cancel(EXECUTION_NOTIFICATION_ID)
+        }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
