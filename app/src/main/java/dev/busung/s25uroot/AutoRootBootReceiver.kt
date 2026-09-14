@@ -4,6 +4,7 @@ import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,6 +14,7 @@ import kotlinx.coroutines.launch
 class AutoRootBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        val bootCompletedElapsedRealtime = SystemClock.elapsedRealtime()
 
         // Shizuku is a boot utility, not part of root acquisition. Start its
         // coordinator immediately on every framework BOOT_COMPLETED. After a
@@ -56,7 +58,13 @@ class AutoRootBootReceiver : BroadcastReceiver() {
             return
         }
 
-        context.startForegroundService(Intent(context, AutoRootService::class.java))
+        context.startForegroundService(
+            Intent(context, AutoRootService::class.java)
+                .putExtra(
+                    AutoRootService.EXTRA_BOOT_COMPLETED_ELAPSED_REALTIME,
+                    bootCompletedElapsedRealtime,
+                ),
+        )
     }
 
     private fun stopAutoRootRuntime(context: Context) {
