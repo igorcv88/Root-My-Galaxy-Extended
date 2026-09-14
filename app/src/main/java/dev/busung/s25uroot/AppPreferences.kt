@@ -2,7 +2,6 @@ package dev.busung.s25uroot
 
 import android.app.LocaleManager
 import android.content.Context
-import android.content.SharedPreferences
 import android.os.LocaleList
 
 enum class AccentColor(val storedValue: String) {
@@ -40,6 +39,7 @@ object AppPreferences {
     // post-root KernelSU soft reboot for manual installs. Auto Root never consumes
     // this preference automatically; it offers soft reboot as a notification action.
     private const val RESTART_ZYGOTE_AFTER_ROOT = "soft_reboot_after_root"
+    private const val AUTO_START_SHIZUKU_AFTER_ROOT = "auto_start_shizuku_after_root"
     private const val START_SHIZUKU_ON_BOOT = "start_shizuku_on_boot"
     private const val SHIZUKU_AUTOMATION_TOKEN = "shizuku_automation_token"
     private const val ADB_PAIRED = "adb_paired"
@@ -85,16 +85,6 @@ object AppPreferences {
     }
 
     /**
-     * Effective dependency used by the settings UI. This never mutates the user's
-     * independent Start Shizuku on boot preference: Auto Root merely forces the
-     * effective state on while its selected target requires a shell transport.
-     */
-    fun shizukuBootRequiredByAutoRoot(context: Context): Boolean =
-        autoRootEnabled(context) && runCatching {
-            AutoRootSupport.requiresShellTransport(context)
-        }.getOrDefault(false)
-
-    /**
      * Used only before a destructive reboot. `commit()` is deliberate: a reboot
      * must not race the asynchronous SharedPreferences disk write and come back
      * with Auto Root still enabled.
@@ -109,24 +99,17 @@ object AppPreferences {
         prefs(context).edit().putBoolean(RESTART_ZYGOTE_AFTER_ROOT, enabled).apply()
     }
 
-    /**
-     * Legacy compatibility shim. Shizuku startup is coordinated before Auto Root
-     * when a shell transport is required. Repeating it after root caused duplicate
-     * starts and notifications whenever the server was already alive but Binder
-     * delivery to RMG lagged behind.
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun autoStartShizukuAfterRoot(context: Context): Boolean = false
+    fun autoStartShizukuAfterRoot(context: Context): Boolean =
+        prefs(context).getBoolean(AUTO_START_SHIZUKU_AFTER_ROOT, true)
 
-    /** Kept only so older source callers do not need an immediate API migration. */
-    @Suppress("UNUSED_PARAMETER")
-    fun setAutoStartShizukuAfterRoot(context: Context, enabled: Boolean) = Unit
+    fun setAutoStartShizukuAfterRoot(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(AUTO_START_SHIZUKU_AFTER_ROOT, enabled).apply()
+    }
 
     /**
      * Independent pre-root boot bootstrap. Default off so an existing Shizuku,
      * Tasker, or other boot starter remains the single owner until the user opts
-     * in to RMG's redundant coordinator explicitly. Auto Root may still request
-     * its priority bootstrap when the selected target requires shell transport.
+     * in to RMG's redundant coordinator explicitly.
      */
     fun startShizukuOnBoot(context: Context): Boolean =
         prefs(context).getBoolean(START_SHIZUKU_ON_BOOT, false)
@@ -185,20 +168,6 @@ object AppPreferences {
         val preferences = prefs(context)
         if (preferences.getString(CONSUMED_INSTALL_REQUEST, null) == requestId) return false
         return preferences.edit().putString(CONSUMED_INSTALL_REQUEST, requestId).commit()
-    }
-
-    internal fun registerPreferenceListener(
-        context: Context,
-        listener: SharedPreferences.OnSharedPreferenceChangeListener,
-    ) {
-        prefs(context).registerOnSharedPreferenceChangeListener(listener)
-    }
-
-    internal fun unregisterPreferenceListener(
-        context: Context,
-        listener: SharedPreferences.OnSharedPreferenceChangeListener,
-    ) {
-        prefs(context).unregisterOnSharedPreferenceChangeListener(listener)
     }
 
     private fun prefs(context: Context) =

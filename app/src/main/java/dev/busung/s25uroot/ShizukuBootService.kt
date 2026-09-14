@@ -62,7 +62,6 @@ class ShizukuBootService : Service() {
             Log.i(TAG, "Auto Root requested priority Shizuku bootstrap")
         }
         if (!shouldRun()) {
-            removeForegroundNotification()
             stopSelf(startId)
             return START_NOT_STICKY
         }
@@ -87,7 +86,7 @@ class ShizukuBootService : Service() {
             } finally {
                 // TemporaryWirelessAdb.use owns cleanup for the ADB branch.
                 // Root-only starts never touch adb_wifi_enabled at all.
-                removeForegroundNotification()
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
         }
@@ -101,7 +100,6 @@ class ShizukuBootService : Service() {
         // Cancellation inside TemporaryWirelessAdb.use executes its own finally;
         // abrupt process death is covered by TemporaryWirelessAdb's failsafe alarm.
         // Do not disable Wireless ADB here when this service only used root.
-        removeForegroundNotification()
         scope.cancel()
         super.onDestroy()
     }
@@ -407,15 +405,6 @@ class ShizukuBootService : Service() {
         )
     }
 
-    /** Remove both the foreground association and any stale notification copy. */
-    private fun removeForegroundNotification() {
-        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
-        runCatching {
-            getSystemService(NotificationManager::class.java)
-                .cancel(SHIZUKU_BOOT_NOTIFICATION_ID)
-        }
-    }
-
     private fun buildNotification(message: String) =
         NotificationCompat.Builder(this, SHIZUKU_BOOT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_app_logo)
@@ -471,8 +460,6 @@ class ShizukuBootService : Service() {
 
         fun stop(context: Context) {
             context.stopService(Intent(context, ShizukuBootService::class.java))
-            context.getSystemService(NotificationManager::class.java)
-                .cancel(SHIZUKU_BOOT_NOTIFICATION_ID)
         }
 
         private const val EXTRA_AUTO_ROOT_PRIORITY =

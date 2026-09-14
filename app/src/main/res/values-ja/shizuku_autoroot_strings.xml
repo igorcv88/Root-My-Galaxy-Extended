@@ -1,4 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="shizuku_boot_required_by_autoroot">このファームウェアでは Auto Root に必要です。この設定を変更するには Auto Root を無効にしてください。</string>
-</resources>

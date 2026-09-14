@@ -14,7 +14,7 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.Message
 import android.os.Messenger
-import android.os.SystemClock
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.util.UUID
@@ -34,15 +34,10 @@ internal const val AUTO_ROOT_CHANNEL_ID = "auto_root_postboot"
  * Foreground boot gate for Auto Root.
  *
  * BOOT_COMPLETED is the Android-readiness signal. The gate owns the foreground
- * lifecycle and target-specific stabilization wait. Standalone targets still
- * execute through a fresh :autoroot_exec process. Targets that require shell are
- * dispatched to the default/provider process so they can consume the authoritative
- * Shizuku Binder there; the exploit itself still runs remotely with shell identity.
- *
- * For ZZI4, the provider-process executor is bound early but remains passive during
- * stabilization. That binding keeps the ShizukuProvider client process alive while
- * Shizuku starts, without selecting a transport or launching the exploit. The start
- * command is armed only after the full post-BOOT_COMPLETED barrier and quiet window.
+ * lifecycle and minimum-uptime wait. Standalone targets still execute through a
+ * fresh :autoroot_exec process. Targets that require shell are dispatched to the
+ * default/provider process so they use the authoritative Shizuku Binder there;
+ * the exploit itself still runs remotely with shell identity.
  */
 class AutoRootService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -51,13 +46,8 @@ class AutoRootService : Service() {
     private var bindingLossJob: Job? = null
     private var executorBound = false
     private var executorConnected = false
-    private var executorStartReady = false
-    private var executorStartDelivered = false
-    private var executorMessenger: Messenger? = null
-    private var boundExecutorName: String? = null
     private var shuttingDown = false
     private var pendingBootToken: String? = null
-    private var bootCompletedElapsedRealtime: Long? = null
 
     private val executorConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -67,32 +57,36 @@ class AutoRootService : Service() {
                 return
             }
 
-            bindingLossJob?.cancel()
-            bindingLossJob = null
-            executorMessenger = Messenger(service)
-            executorConnected = true
-            handoffTimeoutJob?.cancel()
-            handoffTimeoutJob = null
+            val bootToken = pendingBootToken
+            if (bootToken.isNullOrBlank()) {
+                failWithoutExecutorResult("executor handoff lost the boot token")
+                return
+            }
 
-            if (executorStartReady) {
-                deliverExecutorStartIfReady()
-            } else {
-                Log.i(
-                    TAG,
-                    "Auto Root executor connected early; holding provider process through stabilization",
+            try {
+                val command = Message.obtain(null, AutoRootExecutorService.MSG_START_AUTO_ROOT).apply {
+                    data = Bundle().apply {
+                        putString(AutoRootExecutorService.EXTRA_BOOT_TOKEN, bootToken)
+                    }
+                }
+                Messenger(service).send(command)
+                executorConnected = true
+                handoffTimeoutJob?.cancel()
+                handoffTimeoutJob = null
+                updateNotification(getString(R.string.autoroot_preparing_exploit))
+                Log.i(TAG, "Auto Root executor connected and start command delivered")
+            } catch (error: Throwable) {
+                failWithoutExecutorResult(
+                    "unable to start connected executor: ${error.message ?: error.javaClass.simpleName}",
                 )
             }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            executorConnected = false
-            executorMessenger = null
             scheduleBindingLossFailure("executor disconnected")
         }
 
         override fun onBindingDied(name: ComponentName?) {
-            executorConnected = false
-            executorMessenger = null
             scheduleBindingLossFailure("executor binding died")
         }
 
@@ -129,11 +123,6 @@ class AutoRootService : Service() {
 
         if (runJob?.isActive == true || executorBound) return START_NOT_STICKY
 
-        bootCompletedElapsedRealtime = intent
-            ?.getLongExtra(EXTRA_BOOT_COMPLETED_ELAPSED_REALTIME, -1L)
-            ?.takeIf { it >= 0L }
-            ?: SystemClock.elapsedRealtime()
-
         val initial = buildNotification(getString(R.string.autoroot_stabilizing_android), ongoing = true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -161,9 +150,6 @@ class AutoRootService : Service() {
             runCatching { unbindService(executorConnection) }
             executorBound = false
         }
-        executorConnected = false
-        executorMessenger = null
-        executorStartReady = false
         pendingBootToken = null
         scope.cancel()
         stopForeground(STOP_FOREGROUND_DETACH)
@@ -178,6 +164,11 @@ class AutoRootService : Service() {
             return
         }
 
+        val wakeLock = getSystemService(PowerManager::class.java).newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "$packageName:AutoRootGate",
+        )
+        wakeLock.acquire(MAX_GATE_WAKELOCK_MILLIS)
         try {
             if (!AppPreferences.autoRootEnabled(this)) {
                 stopWithoutResult()
@@ -187,13 +178,11 @@ class AutoRootService : Service() {
                 getString(R.string.autoroot_prior_install_required)
             }
 
-            val device = DeviceSnapshot.current()
             val shellTransportRequired = AutoRootSupport.requiresShellTransport(this)
             if (shellTransportRequired) {
-                // Bring Shizuku up at the start of the post-boot settling period,
-                // not beside the scheduler-sensitive exploit. The ZZI4 barrier
-                // below explicitly stops this coordinator before executor handoff;
-                // stopping the coordinator never stops an already-running Shizuku server.
+                // On ZZI4 the exploit route needs u:r:shell:s0 for tracefs. Start
+                // Shizuku before the uptime gate instead of letting the two boot
+                // automations race each other.
                 ShizukuBootService.startForAutoRoot(this)
                 Log.i(TAG, "Auto Root target requires shell transport; prioritizing Shizuku bootstrap")
             }
@@ -205,41 +194,13 @@ class AutoRootService : Service() {
                 return
             }
 
-            if (shellTransportRequired && isExactZzi4(device)) {
-                // Binding is intentionally transport-neutral: AutoRootShellExecutorService
-                // only returns a Messenger from onBind(). It does not inspect Shizuku,
-                // choose Local ADB, claim the boot attempt, or launch the payload until
-                // MSG_START_AUTO_ROOT is sent after stabilization. Keeping this binding
-                // alive preserves the provider process that receives the Shizuku Binder.
-                bindExecutor(shellTransportRequired = true, prewarm = true)
-            }
-
-            when {
-                isExactZzi4(device) -> {
-                    val bootCompletedAt = bootCompletedElapsedRealtime ?: SystemClock.elapsedRealtime()
-                    val target = bootCompletedAt + ZZI4_POST_BOOT_STABILIZATION_MILLIS
-                    Log.i(
-                        TAG,
-                        "ZZI4 Auto Root settling until 180s after BOOT_COMPLETED before exploit preparation",
-                    )
-                    // Deliberately no PARTIAL_WAKE_LOCK here. The point of this
-                    // phase is to let the post-boot workload settle naturally. The
-                    // executor acquires its own wake lock only for real root work.
-                    waitUntilElapsedRealtime(target)
-
-                    // The bootstrap has had the full post-boot window to produce a
-                    // Binder. End any still-running RMG coordinator and give its
-                    // Wi-Fi/mDNS/ADB cleanup a deterministic quiet interval before
-                    // transport selection. The already-bound provider process stays alive.
-                    ShizukuBootService.stop(this)
-                    delay(ZZI4_SHIZUKU_SETTLE_QUIET_MILLIS)
-                }
-                isExactCzg3(device) -> {
-                    // Keep the validated CZG3 total-kernel-uptime policy separate
-                    // from ZZI4's post-BOOT_COMPLETED Auto Root policy.
-                    DiagnosticUptime.waitUntil(AppPreferences.autoRootBootMinUptimeSeconds(this))
-                }
-                else -> delay(LEGACY_STABILIZATION_DELAY_MILLIS)
+            if (isExactCzg3(DeviceSnapshot.current())) {
+                // Auto Root has its own conservative floor. Do not reuse the
+                // Manual "Diagnostic Launch Time" preference: changing automatic
+                // boot latency must not silently change Manual Standalone behavior.
+                DiagnosticUptime.waitUntil(AppPreferences.autoRootBootMinUptimeSeconds(this))
+            } else {
+                delay(LEGACY_STABILIZATION_DELAY_MILLIS)
             }
 
             if (!AppPreferences.autoRootEnabled(this)) {
@@ -260,95 +221,47 @@ class AutoRootService : Service() {
 
             updateNotification(getString(R.string.autoroot_checking_firmware))
 
-            // Only now arm the executor. An early provider-process bind never pins
-            // Shizuku or Local ADB; transport selection still happens inside
-            // AutoRootExecutorService after this explicit start command.
+            // The target decides which coordinator process is correct. Standalone
+            // needs the historical fresh process; shell-required execution must stay
+            // with the ShizukuProvider process because that process owns the client Binder.
             pendingBootToken = bootToken
-            executorStartReady = true
-            if (!executorBound) {
-                bindExecutor(shellTransportRequired = shellTransportRequired, prewarm = false)
+            val executorClass = if (shellTransportRequired) {
+                AutoRootShellExecutorService::class.java
+            } else {
+                AutoRootExecutorService::class.java
             }
-            deliverExecutorStartIfReady()
+            val executorIntent = Intent(this, executorClass)
+                .setAction(AutoRootExecutorService.ACTION_RUN_AUTO_ROOT)
+            Log.i(
+                TAG,
+                "Binding Auto Root executor=${executorClass.simpleName} shellRequired=$shellTransportRequired",
+            )
+            val bindFlags = Context.BIND_AUTO_CREATE or
+                Context.BIND_IMPORTANT or
+                Context.BIND_ABOVE_CLIENT
+            require(bindService(executorIntent, executorConnection, bindFlags)) {
+                "Unable to bind Auto Root executor ${executorClass.simpleName}"
+            }
+            executorBound = true
+
+            // bindService(true) only means the bind request was accepted. It does
+            // not prove that the selected executor exists or onServiceConnected ran.
+            handoffTimeoutJob = scope.launch {
+                delay(EXECUTOR_CONNECT_TIMEOUT_MILLIS)
+                if (!executorConnected && !shuttingDown) {
+                    failWithoutExecutorResult(
+                        "Auto Root executor ${executorClass.simpleName} did not connect within ${EXECUTOR_CONNECT_TIMEOUT_MILLIS / 1_000}s",
+                    )
+                }
+            }
         } catch (error: Throwable) {
             if (!scope.isActive) return
             val detail = error.message ?: error.javaClass.simpleName
             Log.e(TAG, "Auto Root gate failed", error)
             recordGateFailure(detail, initialBootToken)
             finishWithResult(getString(R.string.autoroot_failed, detail))
-        }
-    }
-
-    private fun bindExecutor(shellTransportRequired: Boolean, prewarm: Boolean) {
-        if (executorBound) return
-
-        val executorClass = if (shellTransportRequired) {
-            AutoRootShellExecutorService::class.java
-        } else {
-            AutoRootExecutorService::class.java
-        }
-        val executorIntent = Intent(this, executorClass)
-            .setAction(AutoRootExecutorService.ACTION_RUN_AUTO_ROOT)
-        val phase = if (prewarm) "prewarming" else "binding"
-        Log.i(
-            TAG,
-            "$phase Auto Root executor=${executorClass.simpleName} shellRequired=$shellTransportRequired",
-        )
-        val bindFlags = Context.BIND_AUTO_CREATE or
-            Context.BIND_IMPORTANT or
-            Context.BIND_ABOVE_CLIENT
-        require(bindService(executorIntent, executorConnection, bindFlags)) {
-            "Unable to bind Auto Root executor ${executorClass.simpleName}"
-        }
-        executorBound = true
-        boundExecutorName = executorClass.simpleName
-
-        // bindService(true) only means the bind request was accepted. It does not
-        // prove that the selected executor exists or onServiceConnected ran.
-        handoffTimeoutJob?.cancel()
-        handoffTimeoutJob = scope.launch {
-            delay(EXECUTOR_CONNECT_TIMEOUT_MILLIS)
-            if (!executorConnected && !shuttingDown) {
-                failWithoutExecutorResult(
-                    "Auto Root executor ${executorClass.simpleName} did not connect within ${EXECUTOR_CONNECT_TIMEOUT_MILLIS / 1_000}s",
-                )
-            }
-        }
-    }
-
-    private fun deliverExecutorStartIfReady() {
-        if (shuttingDown || !executorStartReady || executorStartDelivered) return
-        val messenger = executorMessenger ?: return
-        val bootToken = pendingBootToken
-        if (bootToken.isNullOrBlank()) {
-            failWithoutExecutorResult("executor handoff lost the boot token")
-            return
-        }
-
-        try {
-            val command = Message.obtain(null, AutoRootExecutorService.MSG_START_AUTO_ROOT).apply {
-                data = Bundle().apply {
-                    putString(AutoRootExecutorService.EXTRA_BOOT_TOKEN, bootToken)
-                }
-            }
-            messenger.send(command)
-            executorStartDelivered = true
-            updateNotification(getString(R.string.autoroot_preparing_exploit))
-            Log.i(
-                TAG,
-                "Auto Root executor ${boundExecutorName ?: "unknown"} start command delivered after stabilization",
-            )
-        } catch (error: Throwable) {
-            failWithoutExecutorResult(
-                "unable to start connected executor: ${error.message ?: error.javaClass.simpleName}",
-            )
-        }
-    }
-
-    private suspend fun waitUntilElapsedRealtime(targetMillis: Long) {
-        while (true) {
-            val remaining = targetMillis - SystemClock.elapsedRealtime()
-            if (remaining <= 0L) return
-            delay(minOf(remaining, 1_000L))
+        } finally {
+            if (wakeLock.isHeld) wakeLock.release()
         }
     }
 
@@ -358,10 +271,9 @@ class AutoRootService : Service() {
         bindingLossJob = scope.launch {
             // A normally finishing bound service can disconnect immediately before
             // its terminal result intent is delivered. Give that result a brief
-            // ordering window before classifying the executor as lost. An early
-            // provider prebind may also reconnect within this grace period.
+            // ordering window before classifying the executor as lost.
             delay(EXECUTOR_RESULT_GRACE_MILLIS)
-            if (!shuttingDown && !executorConnected) failWithoutExecutorResult(detail)
+            if (!shuttingDown) failWithoutExecutorResult(detail)
         }
     }
 
@@ -489,14 +401,11 @@ class AutoRootService : Service() {
         const val EXTRA_RESULT_MESSAGE = "executor_result_message"
         const val EXTRA_REMOVE_NOTIFICATION = "executor_remove_notification"
         const val EXTRA_OFFER_SOFT_REBOOT = "executor_offer_soft_reboot"
-        const val EXTRA_BOOT_COMPLETED_ELAPSED_REALTIME =
-            "dev.busung.s25uroot.extra.BOOT_COMPLETED_ELAPSED_REALTIME"
 
         private const val TAG = "RootMyGalaxyAutoRootGate"
-        private const val ZZI4_POST_BOOT_STABILIZATION_MILLIS = 180_000L
-        private const val ZZI4_SHIZUKU_SETTLE_QUIET_MILLIS = 10_000L
         private const val LEGACY_STABILIZATION_DELAY_MILLIS = 45_000L
         private const val EXECUTOR_CONNECT_TIMEOUT_MILLIS = 10_000L
         private const val EXECUTOR_RESULT_GRACE_MILLIS = 1_500L
+        private const val MAX_GATE_WAKELOCK_MILLIS = 10 * 60 * 1_000L
     }
 }

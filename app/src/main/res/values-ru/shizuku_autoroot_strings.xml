@@ -1,4 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="shizuku_boot_required_by_autoroot">Требуется для Auto Root на этой прошивке. Отключите Auto Root, чтобы изменить этот параметр.</string>
-</resources>

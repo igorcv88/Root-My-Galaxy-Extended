@@ -1,4 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="shizuku_boot_required_by_autoroot">Required by Auto Root for this firmware. Disable Auto Root to change this setting.</string>
-</resources>

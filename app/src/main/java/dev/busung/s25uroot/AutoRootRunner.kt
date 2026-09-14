@@ -1,6 +1,7 @@
 package dev.busung.s25uroot
 
 import android.content.Context
+import android.os.Process
 import android.os.SystemClock
 import java.io.File
 import java.io.InputStream
@@ -28,10 +29,9 @@ private data class AutoRootCommandResult(val code: Int, val output: String)
  * when its client Binder is usable, otherwise the already-paired local Wireless
  * ADB transport. It never degrades a shell-required target to untrusted-app/P0.
  *
- * ZZI4 deliberately keeps KernelSU file staging out of the pre-exploit hot path:
- * bootstrap root lands first, then the verified daemon is staged, late-loaded,
- * and globally verified. Legacy targets retain their established auto-late-load
- * behavior.
+ * KernelSU is expected to auto-late-load from the UMH root helper as soon as
+ * bootstrap root lands. The historical client stage/--late-load path remains a
+ * fallback when the persisted /data/local/tmp ksud is unavailable.
  */
 internal class AutoRootRunner(
     private val context: Context,
@@ -79,37 +79,28 @@ internal class AutoRootRunner(
 
         onStage(AutoRootStage.LoadingKernelSu)
         withKernelSuClient(shellTransport) { ksuExec, postRootExec ->
-            if (isExactZzi4(payloads.profile)) {
-                // Keep SHA/copy/staging I/O completely after the scheduler-sensitive
-                // exploit. ZZI4 then follows one deterministic handoff:
-                // bootstrap root -> stage verified ksud -> late-load -> verify.
+            val autoLoaded = waitForAutoLateLoad(bootToken, ksuExec, postRootExec)
+
+            if (autoLoaded) {
+                // Keep the same authenticated client principal that acquired root.
+                // A shell-launched v0266 daemon authorizes uid 2000, while legacy
+                // standalone boots authorize the app client. Switching principals
+                // here makes a healthy auto-late-load look unavailable.
+                onLog("[+] KernelSU auto-late-load globally verified; skipped duplicate late-load")
+                onStage(AutoRootStage.VerifyingRoot)
+                verifyKernelSu(bootToken, ksuExec, postRootExec)
+            } else {
+                onLog("[!] KernelSU auto-late-load not globally ready; using same-transport client fallback")
+                logKernelSuAutoStage(ksuExec)
                 stageKernelSuRequired(payloads, ksuExec)
                 val lateLoad = ksuExec(arrayOf("--late-load"))
                 require(lateLoad.code == 0) {
                     context.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
                 }
                 if (lateLoad.output.isNotBlank()) onLog(lateLoad.output)
+
                 onStage(AutoRootStage.VerifyingRoot)
                 verifyKernelSu(bootToken, ksuExec, postRootExec)
-            } else {
-                val autoLoaded = waitForAutoLateLoad(bootToken, ksuExec, postRootExec)
-                if (autoLoaded) {
-                    // Keep the same authenticated client principal that acquired root.
-                    onLog("[+] KernelSU auto-late-load globally verified; skipped duplicate late-load")
-                    onStage(AutoRootStage.VerifyingRoot)
-                    verifyKernelSu(bootToken, ksuExec, postRootExec)
-                } else {
-                    onLog("[!] KernelSU auto-late-load not globally ready; using same-transport client fallback")
-                    logKernelSuAutoStage(ksuExec)
-                    stageKernelSuRequired(payloads, ksuExec)
-                    val lateLoad = ksuExec(arrayOf("--late-load"))
-                    require(lateLoad.code == 0) {
-                        context.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
-                    }
-                    if (lateLoad.output.isNotBlank()) onLog(lateLoad.output)
-                    onStage(AutoRootStage.VerifyingRoot)
-                    verifyKernelSu(bootToken, ksuExec, postRootExec)
-                }
             }
         }
     }
@@ -211,66 +202,85 @@ internal class AutoRootRunner(
         val localHelper = helperFile()
         require(localHelper.canExecute()) { context.getString(R.string.error_helper_unavailable) }
 
+        val originalThreadPriority = runCatching {
+            Process.getThreadPriority(Process.myTid())
+        }.getOrDefault(Process.THREAD_PRIORITY_DEFAULT)
+
         if (shellTransport == AutoRootShellTransport.LocalAdb) {
-            executeExploitViaLocalAdb(
-                payloads = payloads,
-                localHelper = localHelper,
-                bootToken = bootToken,
-                policy = policy,
-                beforeExploit = beforeExploit,
-            )
+            runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
+            try {
+                executeExploitViaLocalAdb(
+                    payloads = payloads,
+                    localHelper = localHelper,
+                    bootToken = bootToken,
+                    policy = policy,
+                    beforeExploit = beforeExploit,
+                )
+            } finally {
+                runCatching { Process.setThreadPriority(originalThreadPriority) }
+            }
             onLog(context.getString(R.string.log_bootstrap_root))
             return
         }
 
-        val process = if (shellTransport == AutoRootShellTransport.Shizuku) {
-            require(ShizukuController.isGranted()) {
-                "Shizuku shell transport is not authorized"
-            }
-
-            val cleanup = ShizukuController.exec(arrayOf("rm", "-f", SHELL_LOG_PATH))
-            try {
-                require(cleanup.waitFor() == 0) {
-                    "Unable to clear the Auto Root shell log"
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
+        val process = try {
+            val launched = if (shellTransport == AutoRootShellTransport.Shizuku) {
+                require(ShizukuController.isGranted()) {
+                    "Shizuku shell transport is not authorized"
                 }
-            } finally {
-                if (cleanup.isAlive) cleanup.destroy()
-            }
 
-            val stagedHelper = shizukuStage(localHelper, SHELL_HELPER_PATH)
-            val stagedPayload = shizukuStage(payload, SHELL_PAYLOAD_PATH)
+                val cleanup = ShizukuController.exec(
+                    arrayOf("rm", "-f", SHELL_LOG_PATH),
+                )
+                try {
+                    require(cleanup.waitFor() == 0) {
+                        "Unable to clear the Auto Root shell log"
+                    }
+                } finally {
+                    if (cleanup.isAlive) cleanup.destroy()
+                }
 
-            // The once-per-boot marker itself is persistent I/O. Commit it before
-            // the final quiet window, then do no app-side storage work while the
-            // payload is alive.
-            beforeExploit()
-            if (isExactZzi4(payloads.profile)) {
-                delay(ZZI4_PRE_EXPLOIT_QUIET_MILLIS)
-            }
-            ShizukuController.exec(
-                arrayOf(
-                    stagedHelper.absolutePath,
+                val stagedHelper = shizukuStage(localHelper, SHELL_HELPER_PATH)
+                val stagedPayload = shizukuStage(payload, SHELL_PAYLOAD_PATH)
+                beforeExploit()
+                ShizukuController.exec(
+                    arrayOf(
+                        stagedHelper.absolutePath,
+                        "--run-payload",
+                        stagedPayload.absolutePath,
+                        stagedHelper.absolutePath,
+                        SHELL_LOG_PATH,
+                    ),
+                    shizukuEnvironment(bootToken, stagedHelper.absolutePath, policy),
+                    "/data/local/tmp",
+                )
+            } else {
+                beforeExploit()
+                val processBuilder = ProcessBuilder(
+                    localHelper.absolutePath,
                     "--run-payload",
-                    stagedPayload.absolutePath,
-                    stagedHelper.absolutePath,
-                    SHELL_LOG_PATH,
-                ),
-                shizukuEnvironment(bootToken, stagedHelper.absolutePath, policy),
-                "/data/local/tmp",
-            )
-        } else {
-            beforeExploit()
-            val processBuilder = ProcessBuilder(
-                localHelper.absolutePath,
-                "--run-payload",
-                payload.absolutePath,
-                localHelper.absolutePath,
-                localLogFile.absolutePath,
-            ).redirectErrorStream(true)
-            processBuilder.environment().putAll(
-                policy.environment(cachedP0OffsetIfEnabled(policy, bootToken)),
-            )
-            processBuilder.start()
+                    payload.absolutePath,
+                    localHelper.absolutePath,
+                    localLogFile.absolutePath,
+                ).redirectErrorStream(true)
+                processBuilder.environment().putAll(
+                    policy.environment(cachedP0Offset(bootToken)),
+                )
+                processBuilder.start()
+            }
+
+            launched.also {
+                val lowered = runCatching {
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                }.isSuccess
+                if (!lowered) runCatching {
+                    Process.setThreadPriority(originalThreadPriority)
+                }
+            }
+        } catch (error: Throwable) {
+            runCatching { Process.setThreadPriority(originalThreadPriority) }
+            throw error
         }
 
         val captured = StringBuilder()
@@ -290,9 +300,7 @@ internal class AutoRootRunner(
             while (process.isAlive) {
                 val rawLog = readLog()
                 if (rawLog != lastRawLog) {
-                    // RAM-only progress accounting. Do not update history,
-                    // SharedPreferences, AtomicFile, UI logs, or caches while the
-                    // scheduler-sensitive payload is alive.
+                    publishExploitLog(rawLog)
                     lastRawLog = rawLog
                     lastProgressAt = SystemClock.elapsedRealtime()
                 }
@@ -334,6 +342,7 @@ internal class AutoRootRunner(
                 delay(500.milliseconds)
                 if (process.isAlive) process.destroyForcibly()
             }
+            runCatching { Process.setThreadPriority(originalThreadPriority) }
         }
         onLog(context.getString(R.string.log_bootstrap_root))
     }
@@ -394,19 +403,18 @@ internal class AutoRootRunner(
                     append(shellQuote(SHELL_LOG_PATH))
                 }
 
-                // Claim after a real shell exists and exact artifacts are staged,
-                // then leave a quiet interval after all transport/persistence setup.
+                // Claim the once-per-boot attempt only after a real shell transport
+                // exists and the exact helper/exploit artifacts have been staged.
+                // KernelSU staging is deliberately post-root on ZZI4 so the
+                // scheduler-sensitive exploit hot path performs no KSUD I/O.
                 beforeExploit()
-                if (isExactZzi4(payloads.profile)) {
-                    delay(ZZI4_PRE_EXPLOIT_QUIET_MILLIS)
-                }
                 onLog("[*] Launching exploit through paired local ADB shell")
 
                 val streamed = session.runStreaming(
                     command = command,
                     overallTimeoutMs = EXPLOIT_TOTAL_MILLIS,
                     stallTimeoutMs = EXPLOIT_STALL_MILLIS,
-                    onOutput = { _ -> Unit },
+                    onOutput = { snapshot -> publishExploitLog(snapshot) },
                 )
                 val remoteLog = session.readLog(SHELL_LOG_PATH)
                 val rawLog = remoteLog.ifBlank { streamed }
@@ -438,7 +446,7 @@ internal class AutoRootRunner(
         policy: ExploitRoutePolicy,
     ): Array<String> = buildList {
         add("CVE43499_ROOT_HELPER=$helperPath")
-        policy.environment(cachedP0OffsetIfEnabled(policy, bootToken)).forEach { (key, value) ->
+        policy.environment(cachedP0Offset(bootToken)).forEach { (key, value) ->
             add("$key=$value")
         }
     }.toTypedArray()
@@ -449,7 +457,7 @@ internal class AutoRootRunner(
         policy: ExploitRoutePolicy,
     ): String = buildList {
         add("CVE43499_ROOT_HELPER=${shellQuote(helperPath)}")
-        policy.environment(cachedP0OffsetIfEnabled(policy, bootToken)).forEach { (key, value) ->
+        policy.environment(cachedP0Offset(bootToken)).forEach { (key, value) ->
             add("$key=${shellQuote(value)}")
         }
     }.joinToString(" ")
@@ -643,9 +651,6 @@ internal class AutoRootRunner(
         if (clean.isNotBlank()) onLog(clean)
     }
 
-    private fun cachedP0OffsetIfEnabled(policy: ExploitRoutePolicy, bootToken: String): String? =
-        if (policy.p0OffsetCache) cachedP0Offset(bootToken) else null
-
     private fun cachedP0Offset(bootToken: String): String? {
         val stored = context.getSharedPreferences(P0_CACHE, Context.MODE_PRIVATE)
         if (stored.getString(P0_CACHE_BOOT_TOKEN, null) != bootToken) return null
@@ -678,7 +683,6 @@ internal class AutoRootRunner(
         private const val AUTO_LATE_LOAD_WAIT_MILLIS = 8_000L
         private const val LOCAL_ADB_SETTLE_MILLIS = 800L
         private const val LOCAL_ADB_PORT_DISCOVERY_TIMEOUT_MILLIS = 30_000L
-        private const val ZZI4_PRE_EXPLOIT_QUIET_MILLIS = 10_000L
         private const val P0_CACHE = "p0_cache"
         private const val P0_CACHE_BOOT_TOKEN = "kernel_boot_id"
         private const val P0_CACHE_OFFSET = "offset"

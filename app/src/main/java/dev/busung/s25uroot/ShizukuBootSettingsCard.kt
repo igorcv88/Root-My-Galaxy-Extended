@@ -1,7 +1,6 @@
 package dev.busung.s25uroot
 
 import android.content.Intent
-import android.content.SharedPreferences
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
@@ -11,8 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ExpandLess
-import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -28,7 +25,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,7 +38,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-/** Settings surface for RMG's boot-time Shizuku coordinator. */
+/** Settings surface for RMG's independent, optional pre-root Shizuku bootstrap. */
 @Composable
 internal fun ShizukuBootSettingsCard() {
     val context = LocalContext.current
@@ -50,27 +46,11 @@ internal fun ShizukuBootSettingsCard() {
     val forgetDoneText = stringResource(R.string.wireless_adb_forget_done)
     val forgetFailedText = stringResource(R.string.wireless_adb_forget_failed)
     val pairingSearchingText = stringResource(R.string.adb_pair_searching)
-    var storedEnabled by remember { mutableStateOf(AppPreferences.startShizukuOnBoot(context)) }
-    var requiredByAutoRoot by remember {
-        mutableStateOf(AppPreferences.shizukuBootRequiredByAutoRoot(context))
-    }
+    var enabled by remember { mutableStateOf(AppPreferences.startShizukuOnBoot(context)) }
     var authToken by remember { mutableStateOf(AppPreferences.shizukuAutomationToken(context)) }
     var diagnostic by remember { mutableStateOf(WirelessAdbDiagnostics.passiveSnapshot(context)) }
-    var diagnosticsExpanded by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
     var showForgetDialog by remember { mutableStateOf(false) }
-    val effectiveEnabled = storedEnabled || requiredByAutoRoot
-
-    DisposableEffect(context) {
-        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-            storedEnabled = AppPreferences.startShizukuOnBoot(context)
-            requiredByAutoRoot = AppPreferences.shizukuBootRequiredByAutoRoot(context)
-        }
-        AppPreferences.registerPreferenceListener(context, listener)
-        onDispose {
-            AppPreferences.unregisterPreferenceListener(context, listener)
-        }
-    }
 
     if (showForgetDialog) {
         AlertDialog(
@@ -133,11 +113,9 @@ internal fun ShizukuBootSettingsCard() {
                     )
                 }
                 Switch(
-                    checked = effectiveEnabled,
-                    enabled = !requiredByAutoRoot,
+                    checked = enabled,
                     onCheckedChange = { checked ->
-                        if (requiredByAutoRoot) return@Switch
-                        storedEnabled = checked
+                        enabled = checked
                         AppPreferences.setStartShizukuOnBoot(context, checked)
                         if (!checked) {
                             ShizukuBootService.stop(context)
@@ -147,15 +125,7 @@ internal fun ShizukuBootSettingsCard() {
                 )
             }
 
-            AnimatedVisibility(visible = requiredByAutoRoot) {
-                Text(
-                    text = stringResource(R.string.shizuku_boot_required_by_autoroot),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-
-            AnimatedVisibility(visible = effectiveEnabled) {
+            AnimatedVisibility(visible = enabled) {
                 OutlinedTextField(
                     value = authToken,
                     onValueChange = { value ->
@@ -176,163 +146,146 @@ internal fun ShizukuBootSettingsCard() {
 
             HorizontalDivider()
 
-            TextButton(
-                onClick = { diagnosticsExpanded = !diagnosticsExpanded },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = stringResource(R.string.wireless_adb_diagnostics_title),
                     style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
                 )
-                Icon(
-                    imageVector = if (diagnosticsExpanded) {
-                        Icons.Rounded.ExpandLess
-                    } else {
-                        Icons.Rounded.ExpandMore
-                    },
-                    contentDescription = null,
+                Text(
+                    text = stringResource(R.string.wireless_adb_diagnostics_description),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
 
-            AnimatedVisibility(visible = diagnosticsExpanded) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = stringResource(R.string.wireless_adb_diagnostics_description),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                    DiagnosticLine(
-                        label = stringResource(R.string.wireless_adb_pairing_state),
-                        value = wirelessAdbStatusLabel(diagnostic.authState),
-                    )
-                    DiagnosticLine(
-                        label = stringResource(R.string.wireless_adb_key_state),
-                        value = stringResource(
-                            if (diagnostic.keyPresent) {
-                                R.string.wireless_adb_key_present
-                            } else {
-                                R.string.wireless_adb_key_missing
-                            },
-                        ),
-                    )
-                    DiagnosticLine(
-                        label = stringResource(R.string.wireless_adb_key_fingerprint),
-                        value = diagnostic.fingerprint ?: "—",
-                    )
-                    DiagnosticLine(
-                        label = stringResource(R.string.wireless_adb_debugging_state),
-                        value = stringResource(
-                            if (diagnostic.wirelessDebuggingEnabled) {
-                                R.string.wireless_adb_enabled
-                            } else {
-                                R.string.wireless_adb_disabled
-                            },
-                        ),
-                    )
-                    DiagnosticLine(
-                        label = stringResource(R.string.wireless_adb_connect_port),
-                        value = diagnostic.connectPort?.toString() ?: "—",
-                    )
-
-                    Text(
-                        text = diagnostic.detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-
-                    FilledTonalButton(
-                        onClick = {
-                            if (testing) return@FilledTonalButton
-                            testing = true
-                            scope.launch {
-                                diagnostic = WirelessAdbDiagnostics.testConnection(context)
-                                testing = false
-                            }
+                DiagnosticLine(
+                    label = stringResource(R.string.wireless_adb_pairing_state),
+                    value = wirelessAdbStatusLabel(diagnostic.authState),
+                )
+                DiagnosticLine(
+                    label = stringResource(R.string.wireless_adb_key_state),
+                    value = stringResource(
+                        if (diagnostic.keyPresent) {
+                            R.string.wireless_adb_key_present
+                        } else {
+                            R.string.wireless_adb_key_missing
                         },
-                        enabled = diagnostic.keyPresent && !testing,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        if (testing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                            )
+                    ),
+                )
+                DiagnosticLine(
+                    label = stringResource(R.string.wireless_adb_key_fingerprint),
+                    value = diagnostic.fingerprint ?: "—",
+                )
+                DiagnosticLine(
+                    label = stringResource(R.string.wireless_adb_debugging_state),
+                    value = stringResource(
+                        if (diagnostic.wirelessDebuggingEnabled) {
+                            R.string.wireless_adb_enabled
+                        } else {
+                            R.string.wireless_adb_disabled
+                        },
+                    ),
+                )
+                DiagnosticLine(
+                    label = stringResource(R.string.wireless_adb_connect_port),
+                    value = diagnostic.connectPort?.toString() ?: "—",
+                )
+
+                Text(
+                    text = diagnostic.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                FilledTonalButton(
+                    onClick = {
+                        if (testing) return@FilledTonalButton
+                        testing = true
+                        scope.launch {
+                            diagnostic = WirelessAdbDiagnostics.testConnection(context)
+                            testing = false
                         }
-                        Text(
-                            text = stringResource(
-                                if (testing) R.string.wireless_adb_testing else R.string.wireless_adb_test,
-                            ),
-                            modifier = if (testing) Modifier.padding(start = 8.dp) else Modifier,
+                    },
+                    enabled = diagnostic.keyPresent && !testing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (testing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
                         )
                     }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                diagnostic = WirelessAdbDiagnostics.passiveSnapshot(context)
-                            },
-                            enabled = !testing,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(stringResource(R.string.wireless_adb_refresh))
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                context.startActivity(
-                                    AdbPairingSetupActivity.pairingIntent(
-                                        context = context,
-                                        forceRepair = diagnostic.keyPresent || diagnostic.credentialFlag,
-                                    ),
-                                )
-                                diagnostic = diagnostic.copy(
-                                    credentialFlag = false,
-                                    authState = if (diagnostic.keyPresent) {
-                                        WirelessAdbAuthState.SavedUnverified
-                                    } else {
-                                        WirelessAdbAuthState.NoCredential
-                                    },
-                                    detail = pairingSearchingText,
-                                )
-                            },
-                            enabled = !testing,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(stringResource(R.string.wireless_adb_pair_repair))
-                        }
-                    }
-
-                    OutlinedButton(
-                        onClick = { openWirelessDebuggingSettings(context) },
-                        enabled = !testing,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(stringResource(R.string.wireless_adb_open_settings))
-                    }
-
-                    TextButton(
-                        onClick = { showForgetDialog = true },
-                        enabled = (diagnostic.keyPresent || diagnostic.credentialFlag) && !testing,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(stringResource(R.string.wireless_adb_forget))
-                    }
-
                     Text(
-                        text = stringResource(R.string.wireless_adb_test_note),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = stringResource(R.string.wireless_adb_repair_note),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        text = stringResource(
+                            if (testing) R.string.wireless_adb_testing else R.string.wireless_adb_test,
+                        ),
+                        modifier = if (testing) Modifier.padding(start = 8.dp) else Modifier,
                     )
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            diagnostic = WirelessAdbDiagnostics.passiveSnapshot(context)
+                        },
+                        enabled = !testing,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.wireless_adb_refresh))
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            context.startActivity(
+                                AdbPairingSetupActivity.pairingIntent(
+                                    context = context,
+                                    forceRepair = diagnostic.keyPresent || diagnostic.credentialFlag,
+                                ),
+                            )
+                            diagnostic = diagnostic.copy(
+                                credentialFlag = false,
+                                authState = if (diagnostic.keyPresent) {
+                                    WirelessAdbAuthState.SavedUnverified
+                                } else {
+                                    WirelessAdbAuthState.NoCredential
+                                },
+                                detail = pairingSearchingText,
+                            )
+                        },
+                        enabled = !testing,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.wireless_adb_pair_repair))
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = { openWirelessDebuggingSettings(context) },
+                    enabled = !testing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.wireless_adb_open_settings))
+                }
+
+                TextButton(
+                    onClick = { showForgetDialog = true },
+                    enabled = (diagnostic.keyPresent || diagnostic.credentialFlag) && !testing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.wireless_adb_forget))
+                }
+
+                Text(
+                    text = stringResource(R.string.wireless_adb_test_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = stringResource(R.string.wireless_adb_repair_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
