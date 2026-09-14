@@ -33,6 +33,7 @@ class Zzi4PostRootRuntimeTest {
         assertFalse(command.contains("pidof zygiskd64"))
         assertFalse(command.contains("cat /data/adb/zygisksu/znctx"))
         assertFalse(command.contains("insmod"))
+        assertFalse(command.contains("toybox awk"))
     }
 
     @Test
@@ -66,32 +67,32 @@ class Zzi4PostRootRuntimeTest {
     }
 
     @Test
-    fun manualAndAutoRestartAreGatedBySameRuntimePreparation() {
+    fun manualSoftRebootAndAutoRootNotificationAreSeparated() {
         val manual = File("src/main/java/dev/busung/s25uroot/InstallViewModel.kt").readText()
         val auto = File("src/main/java/dev/busung/s25uroot/AutoRootExecutorService.kt").readText()
-        val post = File("src/main/java/dev/busung/s25uroot/PostRootAutomation.kt").readText()
+        val gate = File("src/main/java/dev/busung/s25uroot/AutoRootService.kt").readText()
+        val receiver = File("src/main/java/dev/busung/s25uroot/AutoRootBootReceiver.kt").readText()
+        val settings = File("src/main/java/dev/busung/s25uroot/MainActivity.kt").readText()
+        val keeper = File("src/main/java/dev/busung/s25uroot/PostRootModuleKeeper.kt").readText()
 
-        assertTrue(manual.contains("prepareZzi4Modules = requireZzi4Runtime"))
-        assertTrue(manual.contains("postRoot?.zzi4RuntimeReady != true"))
-        assertTrue(auto.contains("prepareZzi4Modules = requireZzi4Runtime"))
-        assertTrue(auto.contains("postRoot?.zzi4RuntimeReady != true"))
-        assertTrue(manual.contains("!postRoot.zzi4RestartNeeded"))
-        assertTrue(auto.contains("!postRoot.zzi4RestartNeeded"))
-        assertTrue(manual.contains("oncePerBoot = requireZzi4Runtime"))
-        assertTrue(auto.contains("oncePerBoot = requireZzi4Runtime"))
-        val recovery = File("src/main/java/dev/busung/s25uroot/RootRecoveryActions.kt").readText()
-        assertTrue(recovery.contains("oncePerBoot: Boolean = false"))
-        assertTrue(recovery.contains(".rmg-auto-zygote-restart-boot"))
-        assertTrue(recovery.contains("restart-already-performed-this-boot"))
-        assertTrue(recovery.contains(".rmg-zzi4-postrestart-status"))
-        assertTrue(recovery.contains("RMG_ZZI4_POST_RESTART_OK"))
-        assertTrue(recovery.contains("lsposed-map-timeout"))
-        val secondary = recovery.indexOf("setprop ctl.restart zygote_secondary")
-        val markerWrite = recovery.indexOf("restart-boot-marker-write-failed")
-        assertTrue(secondary >= 0)
-        assertTrue(markerWrite > secondary)
-        assertTrue(post.contains("Zzi4PostRootRuntime.prepareCommand"))
-        assertTrue(post.contains("Zygisk/LSPosed runtime ready before Zygote restart"))
+        assertTrue(manual.contains("softReboot = softRebootAfterRoot"))
+        assertFalse(manual.contains("RootRecoveryActions.restartZygote("))
+        assertTrue(auto.contains("offerSoftReboot ="))
+        assertTrue(auto.contains("Zzi4PostRootRuntime.PROFILE_ID"))
+        assertFalse(auto.contains("RootRecoveryActions.restartZygote("))
+        assertFalse(auto.contains("prepareZzi4Modules = requireZzi4Runtime"))
+        assertTrue(auto.contains("EXTRA_OFFER_SOFT_REBOOT"))
+        assertTrue(gate.contains("ACTION_APPLY_MODULES_SOFT_REBOOT"))
+        assertTrue(receiver.contains("RootRecoveryActions.kernelSuSoftReboot"))
+        assertTrue(receiver.contains("ACTION_APPLY_MODULES_SOFT_REBOOT"))
+        assertFalse(keeper.contains("awk 'NR == 1"))
+        val advancedStart = settings.indexOf("item { SectionLabel(stringResource(R.string.advanced)) }")
+        val aboutStart = settings.indexOf("item { SectionLabel(stringResource(R.string.about)) }", advancedStart)
+        assertTrue(advancedStart >= 0)
+        assertTrue(aboutStart > advancedStart)
+        val advancedSection = settings.substring(advancedStart, aboutStart)
+        assertTrue(advancedSection.contains("AdvancedRecoverySettings("))
+        assertFalse(advancedSection.contains("if (advancedMode)"))
     }
 
 

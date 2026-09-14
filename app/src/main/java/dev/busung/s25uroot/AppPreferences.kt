@@ -35,9 +35,9 @@ object AppPreferences {
     private const val ADVANCED_MODE = "advanced_mode"
     private const val SHIZUKU_MODE = "shizuku_mode"
     private const val AUTO_ROOT_ENABLED = "auto_root_enabled"
-    // Keep the legacy storage key so existing users who enabled the old automatic
-    // KernelSU soft reboot retain the opt-in when its behavior becomes the lighter
-    // post-root Zygote restart.
+    // Keep the original storage key. It again means the user opted into a
+    // post-root KernelSU soft reboot for manual installs. Auto Root never consumes
+    // this preference automatically; it offers soft reboot as a notification action.
     private const val RESTART_ZYGOTE_AFTER_ROOT = "soft_reboot_after_root"
     private const val AUTO_START_SHIZUKU_AFTER_ROOT = "auto_start_shizuku_after_root"
     private const val START_SHIZUKU_ON_BOOT = "start_shizuku_on_boot"

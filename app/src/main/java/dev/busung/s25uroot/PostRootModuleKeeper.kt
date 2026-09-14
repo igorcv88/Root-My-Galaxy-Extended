@@ -120,7 +120,8 @@ internal object PostRootModuleKeeper {
 
         marker_boot() {
             [ -f "${'$'}DONE" ] || return 1
-            awk 'NR == 1 { print ${'$'}1; exit }' "${'$'}DONE" 2>/dev/null
+            IFS=' ' read -r MARKER_BOOT _ < "${'$'}DONE" 2>/dev/null || return 1
+            printf '%s\n' "${'$'}MARKER_BOOT"
         }
 
         publish_request_accepted() {

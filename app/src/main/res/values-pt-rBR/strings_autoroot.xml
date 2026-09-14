@@ -13,6 +13,8 @@
     <string name="autoroot_loading_ksu">Carregando KernelSU…</string>
     <string name="autoroot_verifying_root">Verificando o canal de controle do KernelSU…</string>
     <string name="autoroot_root_restored">Root restaurado</string>
+    <string name="autoroot_root_restored_modules_pending">Root restaurado. Faça o soft reboot quando quiser para aplicar os módulos Zygisk/LSPosed.</string>
+    <string name="autoroot_apply_modules">Aplicar módulos</string>
     <string name="autoroot_failed">Falha no Auto Root: %1$s</string>
     <string name="autoroot_disable">Desativar Auto Root</string>
     <string name="autoroot_profile_invalid">O perfil embutido do Auto Root é inválido.</string>

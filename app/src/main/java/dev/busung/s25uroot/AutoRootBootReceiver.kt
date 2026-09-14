@@ -5,6 +5,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class AutoRootBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -69,16 +73,44 @@ class AutoRootBootReceiver : BroadcastReceiver() {
 
 class AutoRootActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != ACTION_DISABLE_AUTO_ROOT) return
-        AppPreferences.setAutoRootEnabled(context, false)
-        context.stopService(Intent(context, AutoRootExecutorService::class.java))
-        context.stopService(Intent(context, AutoRootService::class.java))
-        context.getSystemService(NotificationManager::class.java)
-            .cancel(AUTO_ROOT_NOTIFICATION_ID)
+        when (intent.action) {
+            ACTION_DISABLE_AUTO_ROOT -> {
+                AppPreferences.setAutoRootEnabled(context, false)
+                context.stopService(Intent(context, AutoRootExecutorService::class.java))
+                context.stopService(Intent(context, AutoRootService::class.java))
+                context.getSystemService(NotificationManager::class.java)
+                    .cancel(AUTO_ROOT_NOTIFICATION_ID)
+            }
+
+            ACTION_APPLY_MODULES_SOFT_REBOOT -> {
+                val pending = goAsync()
+                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                    try {
+                        val result = RootRecoveryActions.kernelSuSoftReboot(
+                            context.applicationContext,
+                        )
+                        if (result.accepted) {
+                            context.getSystemService(NotificationManager::class.java)
+                                .cancel(AUTO_ROOT_NOTIFICATION_ID)
+                            Log.i(TAG, "User accepted KernelSU soft reboot from Auto Root notification")
+                        } else {
+                            Log.w(TAG, "Soft reboot notification action failed: ${result.detail}")
+                        }
+                    } catch (error: Throwable) {
+                        Log.e(TAG, "Soft reboot notification action failed", error)
+                    } finally {
+                        pending.finish()
+                    }
+                }
+            }
+        }
     }
 
     companion object {
         const val ACTION_DISABLE_AUTO_ROOT =
             "dev.busung.s25uroot.action.DISABLE_AUTO_ROOT"
+        const val ACTION_APPLY_MODULES_SOFT_REBOOT =
+            "dev.busung.s25uroot.action.APPLY_MODULES_SOFT_REBOOT"
+        private const val TAG = "RootMyGalaxyAutoRootAction"
     }
 }

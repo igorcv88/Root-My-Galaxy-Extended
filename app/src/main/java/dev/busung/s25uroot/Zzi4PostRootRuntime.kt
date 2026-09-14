@@ -42,16 +42,16 @@ internal object Zzi4PostRootRuntime {
                 exit 70
             }
             zn_ready() {
-                /system/bin/ps -A -o NAME,ARGS 2>/dev/null | /system/bin/toybox awk \
-                    '${'$'}1 == "zn-daemon" { found=1 } END { exit(found ? 0 : 1) }'
+                /system/bin/ps -A -o NAME 2>/dev/null | /system/bin/grep -Eq \
+                    '^[[:space:]]*zn-daemon[[:space:]]*$'
             }
             module_ready() {
                 /system/bin/grep -Eq '^zygisk_lsposed[[:space:]]+64([[:space:]]|${'$'})' \
                     "${'$'}ZNS/modules_info" 2>/dev/null
             }
             lspd_ready() {
-                /system/bin/ps -A -o NAME,ARGS 2>/dev/null | /system/bin/toybox awk \
-                    '${'$'}1 ~ /^lspd($|:)/ || ${'$'}1 == "LSPosed" || index(${'$'}0, "/data/adb/modules/zygisk_lsposed/daemon") { found=1 } END { exit(found ? 0 : 1) }'
+                /system/bin/ps -A -o NAME 2>/dev/null | /system/bin/grep -Eq \
+                    '^[[:space:]]*(lspd(:.*)?|LSPosed)[[:space:]]*$'
             }
 
             [ "${'$'}(/system/bin/id -u 2>/dev/null)" = '0' ] || fail 'not-root'

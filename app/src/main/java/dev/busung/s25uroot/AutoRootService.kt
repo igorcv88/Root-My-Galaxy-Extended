@@ -105,12 +105,17 @@ class AutoRootService : Service() {
             bindingLossJob?.cancel()
             bindingLossJob = null
             val removeNotification = intent.getBooleanExtra(EXTRA_REMOVE_NOTIFICATION, false)
+            val offerSoftReboot = intent.getBooleanExtra(EXTRA_OFFER_SOFT_REBOOT, false)
             val message = intent.getStringExtra(EXTRA_RESULT_MESSAGE)
             if (removeNotification) {
                 stopWithoutResult()
             } else {
                 finishWithResult(
-                    message ?: getString(R.string.autoroot_failed, "executor returned no result"),
+                    message = message ?: getString(
+                        R.string.autoroot_failed,
+                        "executor returned no result",
+                    ),
+                    offerSoftReboot = offerSoftReboot,
                 )
             }
             return START_NOT_STICKY
@@ -308,12 +313,16 @@ class AutoRootService : Service() {
         )
     }
 
-    private fun finishWithResult(message: String) {
+    private fun finishWithResult(message: String, offerSoftReboot: Boolean = false) {
         if (shuttingDown) return
         shuttingDown = true
         getSystemService(NotificationManager::class.java).notify(
             AUTO_ROOT_NOTIFICATION_ID,
-            buildNotification(message, ongoing = false),
+            buildNotification(
+                message = message,
+                ongoing = false,
+                offerSoftReboot = offerSoftReboot,
+            ),
         )
         stopForeground(STOP_FOREGROUND_DETACH)
         stopSelf()
@@ -327,8 +336,12 @@ class AutoRootService : Service() {
         stopSelf()
     }
 
-    private fun buildNotification(message: String, ongoing: Boolean) =
-        NotificationCompat.Builder(this, AUTO_ROOT_CHANNEL_ID)
+    private fun buildNotification(
+        message: String,
+        ongoing: Boolean,
+        offerSoftReboot: Boolean = false,
+    ): android.app.Notification {
+        val builder = NotificationCompat.Builder(this, AUTO_ROOT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_app_logo)
             .setContentTitle(getString(R.string.autoroot_notification_title))
             .setContentText(message)
@@ -355,7 +368,21 @@ class AutoRootService : Service() {
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 ),
             )
-            .build()
+        if (offerSoftReboot) {
+            builder.addAction(
+                0,
+                getString(R.string.autoroot_apply_modules),
+                PendingIntent.getBroadcast(
+                    this,
+                    2,
+                    Intent(this, AutoRootActionReceiver::class.java)
+                        .setAction(AutoRootActionReceiver.ACTION_APPLY_MODULES_SOFT_REBOOT),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        }
+        return builder.build()
+    }
 
     private fun createNotificationChannel() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
@@ -373,6 +400,7 @@ class AutoRootService : Service() {
         const val ACTION_EXECUTOR_RESULT = "dev.busung.s25uroot.action.AUTO_ROOT_EXECUTOR_RESULT"
         const val EXTRA_RESULT_MESSAGE = "executor_result_message"
         const val EXTRA_REMOVE_NOTIFICATION = "executor_remove_notification"
+        const val EXTRA_OFFER_SOFT_REBOOT = "executor_offer_soft_reboot"
 
         private const val TAG = "RootMyGalaxyAutoRootGate"
         private const val LEGACY_STABILIZATION_DELAY_MILLIS = 45_000L

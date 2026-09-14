@@ -245,102 +245,45 @@ open class AutoRootExecutorService : Service() {
             AutoRootSupport.markVerifiedForBoot(this, bootToken)
             appendHistory("[+] Auto Root completed")
 
-            // Persist verified root before any userspace restart. The automatic
-            // recovery action is deliberately only a Zygote/system_server restart;
-            // KernelSU's full userspace soft reboot remains an explicit Advanced tool.
+            // Root restoration is the terminal automatic action. A userspace
+            // restart is disruptive and must remain explicitly user initiated.
             finishHistory(InstallRunResult.Succeeded)
 
-            val restartZygote = AppPreferences.restartZygoteAfterRoot(this)
             val startShizuku = AppPreferences.autoStartShizukuAfterRoot(this)
-            if (restartZygote || startShizuku) {
-                if (restartZygote) updateNotification(getString(R.string.zygote_restart_starting))
-
-                val requireZzi4Runtime =
-                    restartZygote && payloads.profile.profileId == Zzi4PostRootRuntime.PROFILE_ID
-                val postRoot = if (startShizuku || requireZzi4Runtime) {
-                    try {
-                        PostRootAutomation.run(
-                            context = this,
-                            softReboot = false,
-                            startShizuku = startShizuku,
-                            prepareZzi4Modules = requireZzi4Runtime,
-                            onLog = { appendHistory(it) },
-                        )
-                    } catch (error: Throwable) {
-                        val detail = error.message ?: error.javaClass.simpleName
-                        appendHistory("[!] Post-root automation failed: $detail")
-                        Log.w(TAG, "Post-root automation failed after verified root", error)
-                        null
-                    }
-                } else {
-                    null
-                }
-                if (startShizuku && postRoot != null &&
-                    !postRoot.shizukuStarted && postRoot.detail.isNotBlank()
-                ) {
-                    appendHistory("[!] Post-root Shizuku automation: ${postRoot.detail.take(200)}")
-                }
-
-                if (restartZygote && requireZzi4Runtime && postRoot?.zzi4RuntimeReady != true) {
-                    val detail = postRoot?.detail ?: "ZZI4 post-root runtime could not be verified"
-                    val message = "KernelSU root is active; Zygote restart skipped: ${detail.take(180)}"
-                    appendHistory("[!] $message")
-                    finishHistory(InstallRunResult.Succeeded)
-                    Log.w(TAG, message)
-                    finishWithResult(message)
-                    return
-                }
-
-                if (
-                    restartZygote && requireZzi4Runtime &&
-                    postRoot?.zzi4RuntimeApplicable == true &&
-                    !postRoot.zzi4RestartNeeded
-                ) {
-                    val message = "KernelSU root is active; Zygote restart not needed: LSPosed is already mapped in system_server"
-                    appendHistory("[+] $message")
-                    finishHistory(InstallRunResult.Succeeded)
-                    Log.i(TAG, message)
-                    finishWithResult(message)
-                    return
-                }
-
-                if (restartZygote) {
-                    val restart = try {
-                        RootRecoveryActions.restartZygote(
-                            this,
-                            oncePerBoot = requireZzi4Runtime,
-                        )
-                    } catch (error: Throwable) {
-                        RootRecoveryResult(
-                            accepted = false,
-                            detail = error.message ?: error.javaClass.simpleName,
-                        )
-                    }
-                    if (restart.accepted) {
-                        appendHistory("[+] ${restart.detail}")
-                        finishHistory(InstallRunResult.Succeeded)
-                        Log.i(TAG, "Post-root Zygote restart scheduled")
-                        // The detached recovery script waits briefly before ctl.restart,
-                        // giving this executor time to close the foreground gate cleanly.
-                        stopGateAndSelf(removeNotification = true)
-                        return
-                    }
-
-                    val failureMessage = getString(
-                        R.string.zygote_restart_failed,
-                        restart.detail.take(160),
+            if (startShizuku) {
+                try {
+                    val postRoot = PostRootAutomation.run(
+                        context = this,
+                        softReboot = false,
+                        startShizuku = true,
+                        prepareZzi4Modules = false,
+                        onLog = { appendHistory(it) },
                     )
-                    appendHistory("[!] $failureMessage")
-                    finishHistory(InstallRunResult.Succeeded)
-                    Log.w(TAG, failureMessage)
-                    finishWithResult(failureMessage)
-                    return
+                    if (!postRoot.shizukuStarted && postRoot.detail.isNotBlank()) {
+                        appendHistory("[!] Post-root Shizuku automation: ${postRoot.detail.take(200)}")
+                    }
+                } catch (error: Throwable) {
+                    val detail = error.message ?: error.javaClass.simpleName
+                    appendHistory("[!] Post-root Shizuku automation failed: $detail")
+                    Log.w(TAG, "Post-root Shizuku automation failed after verified root", error)
                 }
-
-                finishHistory(InstallRunResult.Succeeded)
             }
 
-            finishWithResult(getString(R.string.autoroot_root_restored))
+            val offerSoftReboot =
+                payloads.profile.profileId == Zzi4PostRootRuntime.PROFILE_ID
+            if (offerSoftReboot) {
+                appendHistory(
+                    "[*] ZZI4 root restored; KernelSU soft reboot left to the user notification action",
+                )
+            }
+            finishWithResult(
+                message = if (offerSoftReboot) {
+                    getString(R.string.autoroot_root_restored_modules_pending)
+                } else {
+                    getString(R.string.autoroot_root_restored)
+                },
+                offerSoftReboot = offerSoftReboot,
+            )
         } catch (error: Throwable) {
             if (!scope.isActive) return
             val detail = error.message ?: error.javaClass.simpleName
@@ -384,12 +327,20 @@ open class AutoRootExecutorService : Service() {
     }
 
     /** Let the already-running foreground gate own the terminal notification. */
-    private fun finishWithResult(message: String) {
-        val delivered = deliverGateResult(message, removeNotification = false)
+    private fun finishWithResult(message: String, offerSoftReboot: Boolean = false) {
+        val delivered = deliverGateResult(
+            message = message,
+            removeNotification = false,
+            offerSoftReboot = offerSoftReboot,
+        )
         if (!delivered) {
             getSystemService(NotificationManager::class.java).notify(
                 AUTO_ROOT_NOTIFICATION_ID,
-                buildNotification(message, ongoing = false),
+                buildNotification(
+                    message = message,
+                    ongoing = false,
+                    offerSoftReboot = offerSoftReboot,
+                ),
             )
             stopService(Intent(this, AutoRootService::class.java))
         }
@@ -407,20 +358,28 @@ open class AutoRootExecutorService : Service() {
         stopSelf()
     }
 
-    private fun deliverGateResult(message: String?, removeNotification: Boolean): Boolean =
-        runCatching {
-            startService(
-                Intent(this, AutoRootService::class.java)
-                    .setAction(AutoRootService.ACTION_EXECUTOR_RESULT)
-                    .putExtra(AutoRootService.EXTRA_RESULT_MESSAGE, message)
-                    .putExtra(AutoRootService.EXTRA_REMOVE_NOTIFICATION, removeNotification),
-            ) != null
-        }.onFailure { error ->
-            Log.e(TAG, "Unable to deliver executor result to foreground gate", error)
-        }.getOrDefault(false)
+    private fun deliverGateResult(
+        message: String?,
+        removeNotification: Boolean,
+        offerSoftReboot: Boolean = false,
+    ): Boolean = runCatching {
+        startService(
+            Intent(this, AutoRootService::class.java)
+                .setAction(AutoRootService.ACTION_EXECUTOR_RESULT)
+                .putExtra(AutoRootService.EXTRA_RESULT_MESSAGE, message)
+                .putExtra(AutoRootService.EXTRA_REMOVE_NOTIFICATION, removeNotification)
+                .putExtra(AutoRootService.EXTRA_OFFER_SOFT_REBOOT, offerSoftReboot),
+        ) != null
+    }.onFailure { error ->
+        Log.e(TAG, "Unable to deliver executor result to foreground gate", error)
+    }.getOrDefault(false)
 
-    private fun buildNotification(message: String, ongoing: Boolean) =
-        NotificationCompat.Builder(this, AUTO_ROOT_CHANNEL_ID)
+    private fun buildNotification(
+        message: String,
+        ongoing: Boolean,
+        offerSoftReboot: Boolean = false,
+    ): android.app.Notification {
+        val builder = NotificationCompat.Builder(this, AUTO_ROOT_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_app_logo)
             .setContentTitle(getString(R.string.autoroot_notification_title))
             .setContentText(message)
@@ -447,7 +406,21 @@ open class AutoRootExecutorService : Service() {
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 ),
             )
-            .build()
+        if (offerSoftReboot) {
+            builder.addAction(
+                0,
+                getString(R.string.autoroot_apply_modules),
+                PendingIntent.getBroadcast(
+                    this,
+                    2,
+                    Intent(this, AutoRootActionReceiver::class.java)
+                        .setAction(AutoRootActionReceiver.ACTION_APPLY_MODULES_SOFT_REBOOT),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        }
+        return builder.build()
+    }
 
     private fun createNotificationChannel() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(

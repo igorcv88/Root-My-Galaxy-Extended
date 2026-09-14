@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="autoroot_opt_in_title">Automatic root after reboot</string>
     <string name="autoroot_opt_in_description">Restore KernelSU automatically after a full reboot. Auto Root runs at most once per boot, requires the exact supported firmware, verifies cached payload SHA-256, and uses Shizuku only when it is already available and authorized.</string>
     <string name="autoroot_channel_name">Automatic root restore</string>
@@ -13,6 +13,8 @@
     <string name="autoroot_loading_ksu">Loading KernelSU…</string>
     <string name="autoroot_verifying_root">Verifying KernelSU control channel…</string>
     <string name="autoroot_root_restored">Root restored</string>
+    <string name="autoroot_root_restored_modules_pending" tools:ignore="MissingTranslation">Root restored. Soft reboot is available when you want to apply Zygisk/LSPosed modules.</string>
+    <string name="autoroot_apply_modules" tools:ignore="MissingTranslation">Apply modules</string>
     <string name="autoroot_failed">Auto Root failed: %1$s</string>
     <string name="autoroot_disable">Disable Auto Root</string>
     <string name="autoroot_profile_invalid">The embedded Auto Root profile is invalid.</string>

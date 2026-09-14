@@ -229,64 +229,35 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 appendLog(app.getString(R.string.log_install_complete))
                 checkpointHistorySuccess()
 
-                val restartZygote = AppPreferences.restartZygoteAfterRoot(app)
+                val softRebootAfterRoot = AppPreferences.restartZygoteAfterRoot(app)
                 val startShizuku = AppPreferences.autoStartShizukuAfterRoot(app)
-                if (restartZygote || startShizuku) {
-                    if (restartZygote) {
+                if (softRebootAfterRoot || startShizuku) {
+                    if (softRebootAfterRoot) {
                         mutableState.value = mutableState.value.copy(
                             message = app.getString(R.string.zygote_restart_starting),
                         )
                     }
                     try {
-                        val requireZzi4Runtime =
-                            restartZygote && profile.profileId == Zzi4PostRootRuntime.PROFILE_ID
-                        val postRoot = if (startShizuku || requireZzi4Runtime) {
-                            PostRootAutomation.run(
-                                context = app,
-                                softReboot = false,
-                                startShizuku = startShizuku,
-                                prepareZzi4Modules = requireZzi4Runtime,
-                                onLog = ::appendLog,
-                            )
-                        } else {
-                            null
-                        }
-                        if (startShizuku && postRoot != null &&
-                            !postRoot.shizukuStarted && postRoot.detail.isNotBlank()
-                        ) {
+                        val postRoot = PostRootAutomation.run(
+                            context = app,
+                            softReboot = softRebootAfterRoot,
+                            startShizuku = startShizuku,
+                            prepareZzi4Modules = false,
+                            onLog = ::appendLog,
+                        )
+                        if (startShizuku && !postRoot.shizukuStarted && postRoot.detail.isNotBlank()) {
                             appendLog("[!] Post-root Shizuku automation: ${postRoot.detail.take(200)}")
                         }
-
-                        if (restartZygote && requireZzi4Runtime && postRoot?.zzi4RuntimeReady != true) {
-                            appendLog(
-                                "[!] Zygote restart skipped: " +
-                                    (postRoot?.detail ?: "ZZI4 post-root runtime could not be verified"),
-                            )
-                        } else if (
-                            restartZygote && requireZzi4Runtime &&
-                            postRoot?.zzi4RuntimeApplicable == true &&
-                            !postRoot.zzi4RestartNeeded
-                        ) {
-                            appendLog(
-                                "[+] Zygote restart not needed: LSPosed is already mapped in system_server",
-                            )
-                        } else if (restartZygote) {
-                            val restart = RootRecoveryActions.restartZygote(
-                                app,
-                                oncePerBoot = requireZzi4Runtime,
-                            )
-                            if (!restart.accepted) {
-                                val message = app.getString(
-                                    R.string.zygote_restart_failed,
-                                    restart.detail.take(160),
-                                )
-                                mutableState.value = mutableState.value.copy(message = message)
-                                appendLog("[!] $message")
-                            } else {
-                                appendLog("[+] ${restart.detail}")
+                        if (softRebootAfterRoot) {
+                            if (postRoot.softRebootStarted) {
+                                appendLog("[+] KernelSU native soft reboot accepted; module lifecycle will restart")
                                 finishHistory(InstallRunResult.Succeeded)
                                 return@launch
                             }
+                            appendLog(
+                                "[!] Root succeeded, but KernelSU soft reboot was not accepted: " +
+                                    postRoot.detail.take(200),
+                            )
                         }
                     } catch (error: Throwable) {
                         appendLog(

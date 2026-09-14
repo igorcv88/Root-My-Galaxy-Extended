@@ -1804,14 +1804,12 @@ private fun SettingsPage(
                 },
             )
         }
-        if (advancedMode) {
-            item {
-                AdvancedRecoverySettings(
-                    rootActive = installState.phase == InstallPhase.Installed,
-                    autoRootEnabled = autoRootEnabled,
-                    onAutoRootEnabledChanged = onAutoRootEnabledChanged,
-                )
-            }
+        item {
+            AdvancedRecoverySettings(
+                rootActive = installState.phase == InstallPhase.Installed,
+                autoRootEnabled = autoRootEnabled,
+                onAutoRootEnabledChanged = onAutoRootEnabledChanged,
+            )
         }
         item { SectionLabel(stringResource(R.string.about)) }
         item {
