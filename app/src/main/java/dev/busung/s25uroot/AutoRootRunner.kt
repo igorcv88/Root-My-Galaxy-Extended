@@ -300,7 +300,8 @@ internal class AutoRootRunner(
             while (process.isAlive) {
                 val rawLog = readLog()
                 if (rawLog != lastRawLog) {
-                    publishExploitLog(rawLog)
+                    // Track progress in RAM only while the scheduler-sensitive
+                    // payload is alive. Publish the complete log after it exits.
                     lastRawLog = rawLog
                     lastProgressAt = SystemClock.elapsedRealtime()
                 }
@@ -414,7 +415,7 @@ internal class AutoRootRunner(
                     command = command,
                     overallTimeoutMs = EXPLOIT_TOTAL_MILLIS,
                     stallTimeoutMs = EXPLOIT_STALL_MILLIS,
-                    onOutput = { snapshot -> publishExploitLog(snapshot) },
+                    onOutput = { _ -> Unit },
                 )
                 val remoteLog = session.readLog(SHELL_LOG_PATH)
                 val rawLog = remoteLog.ifBlank { streamed }

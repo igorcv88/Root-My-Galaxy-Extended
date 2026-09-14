@@ -86,12 +86,15 @@ internal object AutoRootSupport {
 
     /**
      * Auto Root is deliberately network-free and always consumes known-good cache.
-     * Prepare the verified ksud handoff only here, after the gate has completed its
-     * ordinary validation and before the fresh exploit process is launched.
+     * ZZI4 keeps KernelSU staging out of the scheduler-sensitive pre-exploit path;
+     * the verified ksud source is staged only after bootstrap root lands. Legacy
+     * targets keep their existing prepared handoff behavior.
      */
     fun loadVerifiedLocalPayloads(context: Context): VerifiedPayloads {
         val payloads = KnownGoodPayloadStore.load(context)
-        KernelSuBootstrapStore.prepare(context, payloads)
+        if (!isExactZzi4(payloads.profile)) {
+            KernelSuBootstrapStore.prepare(context, payloads)
+        }
         return payloads
     }
 }

@@ -75,7 +75,7 @@ internal object KnownGoodPayloadStore {
                 existing.profile.exploit.sha256 == profile.exploit.sha256 &&
                 existing.profile.kernelSu.artifact.sha256 == profile.kernelSu.artifact.sha256 &&
                 existing.profile.rootHelper?.sha256 == profile.rootHelper?.sha256 &&
-                existing.profile.routePolicy == normalizeRuntimeProfile(profile).routePolicy
+                existing.profile.routePolicy == profile.routePolicy
         }.getOrDefault(false)
 
         if (!reusable) {
@@ -117,7 +117,7 @@ internal object KnownGoodPayloadStore {
         require(manifestFile.isFile) { "Offline payload manifest is missing" }
         val manifest = SupportManifest.parse(manifestFile.readBytes())
         require(manifest.targets.size == 1) { "Offline payload manifest is invalid" }
-        val profile = normalizeRuntimeProfile(manifest.targets.single())
+        val profile = manifest.targets.single()
         require(profile.exactMatch != null && profile.matches(DeviceSnapshot.current())) {
             context.getString(R.string.autoroot_unsupported_firmware)
         }
@@ -144,19 +144,6 @@ internal object KnownGoodPayloadStore {
         Os.chmod(kernelSu.absolutePath, 0b100100100)
         return VerifiedPayloads(profile, exploit, kernelSu, PayloadSource.Offline)
     }
-
-    /**
-     * Executor policy is safe to normalize independently from the verified binary
-     * artifacts. This lets an already-proven ZZI4 cache adopt the new APK-side
-     * SamSU-parity environment immediately, without downloading or replacing the
-     * exploit/KernelSU blobs before Auto Root.
-     */
-    private fun normalizeRuntimeProfile(profile: TargetProfile): TargetProfile =
-        if (isExactZzi4(profile)) {
-            profile.copy(routePolicy = ExploitRoutePolicy.ZZI4_SAMSU_PARITY)
-        } else {
-            profile
-        }
 
     private fun verifyBundledRootHelper(context: Context, profile: TargetProfile) {
         val expected = requireNotNull(profile.rootHelper) {
