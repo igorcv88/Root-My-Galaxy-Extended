@@ -94,63 +94,51 @@ class Zzi4PostRootRuntimeTest {
         assertTrue(post.contains("Zygisk/LSPosed runtime ready before Zygote restart"))
     }
 
-    @Test
-    fun autoRootStagesVerifiedZzi4KernelSuBeforeExploitClaim() {
-        val source = File("src/main/java/dev/busung/s25uroot/AutoRootRunner.kt").readText()
-        val shizukuStage = source.indexOf("preStageZzi4KernelSuViaShizuku(payloads)")
-        val shizukuClaim = source.indexOf("beforeExploit()", shizukuStage)
-        val localStage = source.indexOf("preStageZzi4KernelSuViaLocalAdb(session, payloads)")
-        val localClaim = source.indexOf("beforeExploit()", localStage)
 
-        assertTrue(shizukuStage >= 0)
-        assertTrue(shizukuClaim > shizukuStage)
-        assertTrue(localStage >= 0)
-        assertTrue(localClaim > localStage)
-        assertTrue(source.contains("remoteArtifactMatches"))
-        assertTrue(source.contains("session.remove(KSUD_STAGE_PATH)"))
-    }
     @Test
-    fun zzi4PreStageReusesVerifiedStableKsudBeforeRefreshingIt() {
+    fun zzi4ExploitHotPathPerformsNoKernelSuPreStageIo() {
         val manual = File("src/main/java/dev/busung/s25uroot/InstallViewModel.kt").readText()
         val auto = File("src/main/java/dev/busung/s25uroot/AutoRootRunner.kt").readText()
 
-        val manualLocalCheck = manual.indexOf("val current = session.shell(verifyCommand)")
-        val manualLocalWrite = manual.indexOf(
-            "session.push(payloads.kernelSu, SHIZUKU_KSUD_PATH, executable = true)",
-            manualLocalCheck,
-        )
-        val manualShizukuCheck = manual.indexOf("val current = ShizukuController.shell(verifyCommand)")
-        val manualShizukuWrite = manual.indexOf(
-            "ShizukuController.writeFile(",
-            manualShizukuCheck,
-        )
-        assertTrue(manualLocalCheck >= 0)
-        assertTrue(manualLocalWrite > manualLocalCheck)
-        assertTrue(manualShizukuCheck >= 0)
-        assertTrue(manualShizukuWrite > manualShizukuCheck)
-        assertTrue(manual.contains("reusedExisting"))
-        assertTrue(manual.contains("action="))
-        assertTrue(manual.contains("ZZI4 Local ADB pin unavailable: adbPaired=false"))
+        val manualRunStart = manual.indexOf("private suspend fun runExploitAndKernelSu")
+        val manualRunEnd = manual.indexOf("private suspend fun executeExploit", manualRunStart)
+        assertTrue(manualRunStart >= 0)
+        assertTrue(manualRunEnd > manualRunStart)
+        val manualHotPath = manual.substring(manualRunStart, manualRunEnd)
+        assertFalse(manualHotPath.contains("preStageKernelSu"))
+        assertFalse(manualHotPath.contains("KSUD"))
+        assertFalse(manual.contains("private fun preStageKernelSuForAutoLateLoad"))
+        assertTrue(manualHotPath.indexOf("executeExploit(") < manualHotPath.indexOf("installKernelSu(payloads)"))
 
-        val autoShizukuCheck = auto.indexOf(
-            "val current = ShizukuController.shell(zzi4KernelSuVerifyCommand())",
-        )
-        val autoShizukuWrite = auto.indexOf(
-            "ShizukuController.writeFile(KSUD_PATH, \"755\", payloads.kernelSu.inputStream())",
-            autoShizukuCheck,
-        )
-        val autoLocalCheck = auto.indexOf("val current = session.shell(zzi4KernelSuVerifyCommand())")
-        val autoLocalWrite = auto.indexOf(
-            "session.push(payloads.kernelSu, KSUD_PATH, executable = true)",
-            autoLocalCheck,
-        )
-        assertTrue(autoShizukuCheck >= 0)
-        assertTrue(autoShizukuWrite > autoShizukuCheck)
-        assertTrue(autoLocalCheck >= 0)
-        assertTrue(autoLocalWrite > autoLocalCheck)
-        assertTrue(auto.contains("zzi4KernelSuPreStageMatches"))
-        assertTrue(auto.contains("action = \"reuse\""))
-        assertTrue(auto.contains("action = \"refresh\""))
+        val autoRunStart = auto.indexOf("suspend fun run(")
+        val autoRunEnd = auto.indexOf("private suspend fun verifyKernelSu", autoRunStart)
+        assertTrue(autoRunStart >= 0)
+        assertTrue(autoRunEnd > autoRunStart)
+        val autoRun = auto.substring(autoRunStart, autoRunEnd)
+        assertTrue(autoRun.indexOf("executeExploit(") < autoRun.indexOf("withKernelSuClient"))
+
+        val autoExploitStart = auto.indexOf("private suspend fun executeExploit(")
+        val autoExploitEnd = auto.indexOf("private suspend fun executeExploitViaLocalAdb", autoExploitStart)
+        assertTrue(autoExploitStart >= 0)
+        assertTrue(autoExploitEnd > autoExploitStart)
+        val autoShizukuHotPath = auto.substring(autoExploitStart, autoExploitEnd)
+        assertFalse(autoShizukuHotPath.contains("preStageZzi4KernelSu"))
+        assertFalse(autoShizukuHotPath.contains("KSUD_PATH"))
+
+        val autoLocalStart = autoExploitEnd
+        val autoLocalEnd = auto.indexOf("private fun shizukuStage", autoLocalStart)
+        assertTrue(autoLocalEnd > autoLocalStart)
+        val autoLocalHotPath = auto.substring(autoLocalStart, autoLocalEnd)
+        assertFalse(autoLocalHotPath.contains("preStageZzi4KernelSu"))
+        assertFalse(autoLocalHotPath.contains("KSUD_PATH"))
+        assertFalse(auto.contains("private fun preStageZzi4KernelSu"))
+        assertFalse(auto.contains("private fun zzi4KernelSuVerifyCommand"))
+
+        // The safe fallback remains post-root in both paths.
+        assertTrue(manual.contains("val stage = runHelper(\"-c\", kernelSuStageCommand(payloads))"))
+        assertTrue(manual.contains("runHelper(\"--late-load\")"))
+        assertTrue(auto.contains("stageKernelSuRequired(payloads, ksuExec)"))
+        assertTrue(auto.contains("ksuExec(arrayOf(\"--late-load\"))"))
     }
 
 }
