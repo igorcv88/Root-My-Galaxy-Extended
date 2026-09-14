@@ -15,6 +15,7 @@ import android.os.IBinder
 import android.os.Message
 import android.os.Messenger
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -139,6 +140,7 @@ class AutoRootExecutionService : Service() {
         }
 
         stopService(Intent(this, AutoRootService::class.java))
+        getSystemService(NotificationManager::class.java).cancel(AUTO_ROOT_NOTIFICATION_ID)
 
         runJob = scope.launch { runExecution(bootToken) }
         return START_NOT_STICKY
@@ -166,7 +168,7 @@ class AutoRootExecutionService : Service() {
         )
         wakeLock.acquire(MAX_EXECUTION_WAKELOCK_MILLIS)
         try {
-            DiagnosticUptime.waitUntil(LAUNCH_UPTIME_SECONDS)
+            waitUntilExactUptime(LAUNCH_UPTIME_SECONDS)
 
             if (!AppPreferences.autoRootEnabled(this)) {
                 stopWithoutResult()
@@ -218,6 +220,15 @@ class AutoRootExecutionService : Service() {
             failWithoutExecutorResult(detail)
         } finally {
             if (wakeLock.isHeld) wakeLock.release()
+        }
+    }
+
+    private suspend fun waitUntilExactUptime(seconds: Int) {
+        val targetMillis = seconds * 1_000L
+        while (true) {
+            val remaining = targetMillis - SystemClock.elapsedRealtime()
+            if (remaining <= 0L) return
+            delay(minOf(remaining, 250L))
         }
     }
 

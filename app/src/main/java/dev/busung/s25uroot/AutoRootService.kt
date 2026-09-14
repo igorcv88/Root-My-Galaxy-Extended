@@ -15,6 +15,7 @@ import android.os.IBinder
 import android.os.Message
 import android.os.Messenger
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.util.UUID
@@ -200,7 +201,7 @@ class AutoRootService : Service() {
                 // then promote a fresh foreground execution service just before
                 // the Manual-equivalent 120 s launch floor. Do not touch the
                 // native payload, FOPS timing, or exploit log publication here.
-                DiagnosticUptime.waitUntil(AutoRootExecutionService.ARM_UPTIME_SECONDS)
+                waitUntilExactUptime(AutoRootExecutionService.ARM_UPTIME_SECONDS)
 
                 if (!AppPreferences.autoRootEnabled(this)) {
                     stopWithoutResult()
@@ -292,6 +293,15 @@ class AutoRootService : Service() {
             finishWithResult(getString(R.string.autoroot_failed, detail))
         } finally {
             if (wakeLock.isHeld) wakeLock.release()
+        }
+    }
+
+    private suspend fun waitUntilExactUptime(seconds: Int) {
+        val targetMillis = seconds * 1_000L
+        while (true) {
+            val remaining = targetMillis - SystemClock.elapsedRealtime()
+            if (remaining <= 0L) return
+            delay(minOf(remaining, 1_000L))
         }
     }
 
