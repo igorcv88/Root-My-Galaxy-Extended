@@ -50,7 +50,6 @@ data class TargetCatalogUiState(
 
 private data class CommandResult(val code: Int, val output: String)
 
-
 internal enum class ManualRunTransport {
     App,
     Shizuku,
@@ -64,8 +63,9 @@ internal fun chooseManualRunTransport(
     localAdbPaired: Boolean,
 ): ManualRunTransport? {
     if (shellRequired) {
+        if (shizukuUsable) return ManualRunTransport.Shizuku
         if (localAdbPaired) return ManualRunTransport.LocalAdb
-        return if (shizukuRequested && shizukuUsable) ManualRunTransport.Shizuku else null
+        return null
     }
     if (shizukuRequested && shizukuUsable) return ManualRunTransport.Shizuku
     return if (shizukuRequested) null else ManualRunTransport.App
@@ -203,6 +203,9 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 val payloads = repository.download(profile) { appendLog("[*] $it") }
                 appendLog(app.getString(R.string.log_download_verified))
 
+                // Manual timing stays independent from Auto Root. Preserve the
+                // validated CZG3 manual uptime gate and do not impose ZZI4's
+                // post-BOOT_COMPLETED Auto Root delay on a user-initiated run.
                 if (isExactCzg3(profile)) {
                     val minimumUptime = AppPreferences.czg3BootMinUptimeSeconds(app)
                     setPhase(
@@ -282,31 +285,26 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     private suspend fun selectRunTransport(profile: TargetProfile): ManualRunTransport {
         val shellRequired = profile.routePolicy.prefersShellTransport
         val localAdbPaired = AppPreferences.adbPaired(app)
-
-        // ZZI4 was hardware-validated through the paired Local ADB shell. Keep
-        // that launch path deterministic even when a Shizuku binder happens to
-        // be alive after boot; the exploit is scheduler-sensitive despite both
-        // transports reporting uid=2000 / u:r:shell:s0.
-        if (profile.profileId == "pa3q-S938BXXUCZZI4" && shellRequired && localAdbPaired) {
-            appendLog("[*] ZZI4 Manual transport pinned to paired Local ADB shell")
-            return ManualRunTransport.LocalAdb
-        }
-        if (profile.profileId == "pa3q-S938BXXUCZZI4" && shellRequired && !localAdbPaired) {
-            appendLog("[*] ZZI4 Local ADB pin unavailable: adbPaired=false; evaluating Shizuku shell")
-        }
-
         val requestedShizuku = AppPreferences.shizukuMode(app)
         var shizukuUsable = false
-        if (requestedShizuku) {
-            appendLog(app.getString(R.string.log_shizuku_prepare))
+
+        if (shellRequired || requestedShizuku) {
+            if (requestedShizuku) appendLog(app.getString(R.string.log_shizuku_prepare))
             val running = ShizukuController.isRunning() || ShizukuController.pingUntilRunning()
             if (running) {
-                shizukuUsable = ShizukuController.isGranted() || ShizukuController.requestPermission()
+                // A shell-required target prefers an already-authorized Shizuku
+                // Binder even when the general Shizuku Mode toggle is off. Do not
+                // raise a permission dialog unless the user explicitly requested
+                // Shizuku Mode; otherwise fail over silently to paired local ADB.
+                shizukuUsable = ShizukuController.isGranted()
+                if (!shizukuUsable && requestedShizuku) {
+                    shizukuUsable = ShizukuController.requestPermission()
+                }
             }
             if (shizukuUsable) {
                 appendLog(app.getString(R.string.log_shizuku_permission))
-            } else if (shellRequired) {
-                appendLog("[!] Shizuku is unavailable; using paired local ADB for this shell-required target")
+            } else if (shellRequired && localAdbPaired) {
+                appendLog("[!] Authorized Shizuku Binder unavailable; using paired local ADB fallback")
             }
         }
 
@@ -316,7 +314,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             shizukuUsable = shizukuUsable,
             localAdbPaired = localAdbPaired,
         ) ?: if (shellRequired) {
-            error("This target requires shell transport, but neither Shizuku nor the paired local ADB key is usable")
+            error("This target requires shell transport, but neither authorized Shizuku nor the paired local ADB key is usable")
         } else {
             error(app.getString(R.string.error_shizuku_unavailable))
         }
@@ -416,7 +414,9 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 helper.absolutePath,
                 logFile.absolutePath,
             ).redirectErrorStream(true)
-            processBuilder.environment().putAll(policy.environment(cachedP0Offset(bootToken)))
+            processBuilder.environment().putAll(
+                policy.environment(cachedP0OffsetIfEnabled(policy, bootToken)),
+            )
             processBuilder.start()
         }
 
@@ -433,8 +433,9 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             while (process.isAlive) {
                 val rawLog = readLog()
                 if (rawLog != lastRawLog) {
-                    if (policy.p0OffsetCache) cacheP0Offset(bootToken, rawLog)
-                    publishExploitLog(logPrefix, rawLog)
+                    // RAM-only progress accounting. History, preferences and UI
+                    // logs are intentionally left untouched while --run-payload
+                    // is alive so app-side persistence cannot perturb the race.
                     lastRawLog = rawLog
                     lastProgressAt = SystemClock.elapsedRealtime()
                 }
@@ -512,12 +513,12 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             command = command,
             overallTimeoutMs = EXPLOIT_TOTAL_MILLIS,
             stallTimeoutMs = EXPLOIT_STALL_MILLIS,
-            onOutput = { snapshot -> publishExploitLog(logPrefix, snapshot) },
+            onOutput = { _ -> Unit },
         )
         val remoteLog = session.readLog(SHIZUKU_LOG_PATH)
         val rawLog = remoteLog.ifBlank { streamed }
-        publishExploitLog(logPrefix, rawLog)
         if (policy.p0OffsetCache) cacheP0Offset(bootToken, rawLog)
+        publishExploitLog(logPrefix, rawLog)
         require(rawLog.contains("exploit completed") && rawLog.contains("done=1 root=1")) {
             app.getString(R.string.error_success_marker)
         }
@@ -553,8 +554,10 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun installKernelSu(payloads: VerifiedPayloads) {
         val bootToken = currentBootToken() ?: error(app.getString(R.string.error_boot_id))
-        val autoLoaded = waitForAutoLateLoad(bootToken)
+        val zzi4 = isExactZzi4(payloads.profile)
+        val autoLoaded = if (zzi4) false else waitForAutoLateLoad(bootToken)
 
+        // ZZI4 intentionally reaches this staging point only after bootstrap root.
         val stage = runHelper("-c", kernelSuStageCommand(payloads))
         require(stage.code == 0) { app.getString(R.string.error_ksu_stage, stage.output) }
         appendLog(app.getString(R.string.log_ksu_staged))
@@ -698,6 +701,11 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             .takeIf(String::isNotBlank)
     }.getOrNull()
 
+    private fun cachedP0OffsetIfEnabled(
+        policy: ExploitRoutePolicy,
+        bootToken: String?,
+    ): String? = if (policy.p0OffsetCache) cachedP0Offset(bootToken) else null
+
     private fun cachedP0Offset(bootToken: String?): String? {
         if (bootToken == null) return null
         val stored = app.getSharedPreferences(P0_CACHE, Application.MODE_PRIVATE)
@@ -756,7 +764,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         policy: ExploitRoutePolicy,
     ): Array<String> = buildList {
         add("CVE43499_ROOT_HELPER=$helperPath")
-        policy.environment(cachedP0Offset(bootToken)).forEach { (key, value) ->
+        policy.environment(cachedP0OffsetIfEnabled(policy, bootToken)).forEach { (key, value) ->
             add("$key=$value")
         }
     }.toTypedArray()
@@ -767,7 +775,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         policy: ExploitRoutePolicy,
     ): String = buildList {
         add("CVE43499_ROOT_HELPER=${shellQuote(helperPath)}")
-        policy.environment(cachedP0Offset(bootToken)).forEach { (key, value) ->
+        policy.environment(cachedP0OffsetIfEnabled(policy, bootToken)).forEach { (key, value) ->
             add("$key=${shellQuote(value)}")
         }
     }.joinToString(" ")
