@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shizuku_boot_required_by_autoroot">Obrigatório para o Auto Root neste firmware. Desative o Auto Root para alterar esta opção.</string>
+</resources>
