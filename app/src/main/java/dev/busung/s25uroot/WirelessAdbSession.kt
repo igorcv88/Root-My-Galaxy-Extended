@@ -115,6 +115,14 @@ class WirelessAdbSession private constructor(
          * established — callers treat this as the "wireless ADB required" gate.
          */
         fun open(context: Context, portDiscoveryTimeoutMs: Long = 60_000): WirelessAdbSession {
+            // A historical pairing flag must never cause AdbKeyManager to
+            // silently generate a brand-new, unpaired identity. Missing key
+            // material means the persisted state is stale and must be cleared.
+            if (!AdbCredentialStore.hasStoredKey(context)) {
+                AppPreferences.setAdbPaired(context, false)
+                error("ADB_CREDENTIAL_MISSING: local RMG ADB key is not available; re-pair required")
+            }
+
             // 1. Ensure wireless debugging is on.
             if (!AdbPairing.isWirelessAdbEnabled(context)) {
                 check(AdbPairing.enableWirelessAdb(context)) {
