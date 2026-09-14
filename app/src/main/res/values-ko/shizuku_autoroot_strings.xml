@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shizuku_boot_required_by_autoroot">이 펌웨어에서는 Auto Root에 필요합니다. 이 설정을 변경하려면 Auto Root를 끄세요.</string>
+</resources>
