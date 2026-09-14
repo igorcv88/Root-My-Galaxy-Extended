@@ -29,6 +29,7 @@ class AutoRootShellTransportContractTest {
         assertTrue(executor.contains("AutoRootShellTransport.LocalAdb"))
         assertTrue(executor.contains("AppPreferences.adbPaired(this)"))
         assertTrue(executor.contains("AUTO_ROOT_SHIZUKU_PREFERENCE_GRACE_MILLIS"))
+        assertFalse(executor.contains("ShizukuBootService.startForAutoRoot(this)"))
 
         val runnerCall = executor.indexOf("runner.run(")
         val callback = executor.indexOf("beforeExploit = {", runnerCall)
@@ -40,6 +41,21 @@ class AutoRootShellTransportContractTest {
 
         val gate = source("AutoRootService.kt")
         assertFalse(gate.contains("AutoRootSupport.claimAttempt(this, bootToken)"))
+        assertTrue(gate.contains("ShizukuBootService.startForAutoRoot(this)"))
+    }
+
+    @Test
+    fun zzi4UsesPostBootCompletedBarrierAndStopsBootstrapBeforeExecutor() {
+        val receiver = source("AutoRootBootReceiver.kt")
+        val gate = source("AutoRootService.kt")
+
+        assertTrue(receiver.contains("SystemClock.elapsedRealtime()"))
+        assertTrue(receiver.contains("EXTRA_BOOT_COMPLETED_ELAPSED_REALTIME"))
+        assertTrue(gate.contains("ZZI4_POST_BOOT_STABILIZATION_MILLIS = 180_000L"))
+        assertTrue(gate.contains("ZZI4_SHIZUKU_SETTLE_QUIET_MILLIS = 10_000L"))
+        assertTrue(gate.contains("bootCompletedAt + ZZI4_POST_BOOT_STABILIZATION_MILLIS"))
+        assertTrue(gate.contains("ShizukuBootService.stop(this)"))
+        assertTrue(gate.contains("delay(ZZI4_SHIZUKU_SETTLE_QUIET_MILLIS)"))
     }
 
     @Test
@@ -58,18 +74,43 @@ class AutoRootShellTransportContractTest {
     }
 
     @Test
-    fun localAdbStagesExactArtifactsBeforeClaimCallback() {
+    fun localAdbStagesExactArtifactsBeforeClaimAndQuietWindow() {
         val runner = source("AutoRootRunner.kt")
         val fallback = runner.indexOf("private suspend fun executeExploitViaLocalAdb(")
         val helperPush = runner.indexOf("session.push(localHelper, SHELL_HELPER_PATH", fallback)
         val payloadPush = runner.indexOf("session.push(payload, SHELL_PAYLOAD_PATH", helperPush)
         val claimCallback = runner.indexOf("beforeExploit()", payloadPush)
-        val launch = runner.indexOf("session.runStreaming(", claimCallback)
+        val quiet = runner.indexOf("delay(ZZI4_PRE_EXPLOIT_QUIET_MILLIS)", claimCallback)
+        val launch = runner.indexOf("session.runStreaming(", quiet)
         assertTrue(fallback >= 0)
         assertTrue(helperPush > fallback)
         assertTrue(payloadPush > helperPush)
         assertTrue(claimCallback > payloadPush)
-        assertTrue(launch > claimCallback)
+        assertTrue(quiet > claimCallback)
+        assertTrue(launch > quiet)
+    }
+
+    @Test
+    fun hotPathAvoidsThreadPriorityDanceAndLiveLogPublishing() {
+        val runner = source("AutoRootRunner.kt")
+        assertFalse(runner.contains("THREAD_PRIORITY_URGENT_DISPLAY"))
+        assertFalse(runner.contains("THREAD_PRIORITY_BACKGROUND"))
+        assertFalse(runner.contains("Process.setThreadPriority"))
+        assertTrue(runner.contains("onOutput = { _ -> Unit }"))
+        assertTrue(runner.contains("RAM-only progress accounting"))
+        assertTrue(runner.contains("cachedP0OffsetIfEnabled"))
+    }
+
+    @Test
+    fun zzi4KernelSuStagingIsPostRootOnly() {
+        val support = source("AutoRootSupport.kt")
+        val repository = source("PayloadRepository.kt")
+        val runner = source("AutoRootRunner.kt")
+
+        assertTrue(support.contains("if (!isExactZzi4(payloads.profile))"))
+        assertTrue(repository.contains("KernelSU staging deferred until ZZI4 bootstrap root"))
+        assertTrue(runner.contains("if (isExactZzi4(payloads.profile))"))
+        assertTrue(runner.contains("stageKernelSuRequired(payloads, ksuExec)"))
     }
 
     @Test
