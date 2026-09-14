@@ -31,12 +31,10 @@ import kotlinx.coroutines.launch
  * The normal component is hosted in the fresh :autoroot_exec process for
  * standalone targets. Shell-required targets bind AutoRootShellExecutorService,
  * which inherits this implementation but stays in the default/provider process.
- * A live authorized Shizuku Binder is preferred there; if early-boot Binder
- * delivery fails, the same executor falls back to RMG's paired local ADB client,
- * which still launches the exploit from u:r:shell:s0.
- *
- * onBind() has no execution side effect: the gate must first connect and then
- * send an explicit start command over Messenger.
+ * A live authorized Shizuku Binder is preferred there; otherwise the executor
+ * falls back to RMG's paired local ADB client, which still launches the exploit
+ * from u:r:shell:s0. The executor never starts a new Shizuku bootstrap: that
+ * activity belongs to the earlier boot-settling phase and must be quiescent here.
  */
 open class AutoRootExecutorService : Service() {
     private val dispatcher: ExecutorCoroutineDispatcher =
@@ -161,9 +159,12 @@ open class AutoRootExecutorService : Service() {
                 }
 
                 updateNotification(getString(R.string.autoroot_preparing_exploit))
-                appendHistory("[*] Checking preferred Shizuku shell transport in provider process")
-                ShizukuBootService.startForAutoRoot(this)
+                appendHistory("[*] Checking already-running Shizuku shell transport in provider process")
 
+                // Passive only. The boot gate already gave the coordinator its
+                // settling window and stopped it before this executor was bound.
+                // Restarting Shizuku here would put Binder/ADB activity beside the
+                // scheduler-sensitive exploit we are about to launch.
                 val shizukuRunning =
                     ShizukuController.awaitRunning(AUTO_ROOT_SHIZUKU_PREFERENCE_GRACE_MILLIS)
                 selectedShellTransport = if (shizukuRunning && ShizukuController.isGranted()) {
@@ -184,10 +185,9 @@ open class AutoRootExecutorService : Service() {
                             "[!] Shizuku Binder was not delivered; selecting paired local ADB shell fallback"
                         },
                     )
-                    // The boot coordinator may itself be retrying local ADB solely
-                    // to obtain a Binder that this app is not receiving. Stop that
-                    // redundant owner before Auto Root opens its own serialized ADB
-                    // session. This does not stop the already-running Shizuku server.
+                    // Defensive cleanup only; this does not stop an already-running
+                    // Shizuku server. AutoRootRunner gives local ADB preparation its
+                    // own quiet interval before launching the payload.
                     ShizukuBootService.stop(this)
                     AutoRootShellTransport.LocalAdb
                 }
