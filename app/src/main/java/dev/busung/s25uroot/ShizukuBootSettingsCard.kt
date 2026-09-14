@@ -43,6 +43,9 @@ import kotlinx.coroutines.launch
 internal fun ShizukuBootSettingsCard() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val forgetDoneText = stringResource(R.string.wireless_adb_forget_done)
+    val forgetFailedText = stringResource(R.string.wireless_adb_forget_failed)
+    val pairingSearchingText = stringResource(R.string.adb_pair_searching)
     var enabled by remember { mutableStateOf(AppPreferences.startShizukuOnBoot(context)) }
     var authToken by remember { mutableStateOf(AppPreferences.shizukuAutomationToken(context)) }
     var diagnostic by remember { mutableStateOf(WirelessAdbDiagnostics.passiveSnapshot(context)) }
@@ -62,13 +65,7 @@ internal fun ShizukuBootSettingsCard() {
                         TemporaryWirelessAdb.forceDisable(context)
                         val forgotten = AdbCredentialStore.forgetLocalCredential(context)
                         diagnostic = WirelessAdbDiagnostics.passiveSnapshot(context).copy(
-                            detail = context.getString(
-                                if (forgotten) {
-                                    R.string.wireless_adb_forget_done
-                                } else {
-                                    R.string.wireless_adb_forget_failed
-                                },
-                            ),
+                            detail = if (forgotten) forgetDoneText else forgetFailedText,
                         )
                     },
                 ) {
@@ -253,7 +250,7 @@ internal fun ShizukuBootSettingsCard() {
                                 } else {
                                     WirelessAdbAuthState.NoCredential
                                 },
-                                detail = context.getString(R.string.adb_pair_searching),
+                                detail = pairingSearchingText,
                             )
                         },
                         enabled = !testing,
