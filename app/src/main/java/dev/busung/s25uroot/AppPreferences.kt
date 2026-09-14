@@ -2,6 +2,7 @@ package dev.busung.s25uroot
 
 import android.app.LocaleManager
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.LocaleList
 
 enum class AccentColor(val storedValue: String) {
@@ -82,6 +83,16 @@ object AppPreferences {
     fun setAutoRootEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(AUTO_ROOT_ENABLED, enabled).apply()
     }
+
+    /**
+     * Effective dependency used by the settings UI. This never mutates the user's
+     * independent Start Shizuku on boot preference: Auto Root merely forces the
+     * effective state on while its selected target requires a shell transport.
+     */
+    fun shizukuBootRequiredByAutoRoot(context: Context): Boolean =
+        autoRootEnabled(context) && runCatching {
+            AutoRootSupport.requiresShellTransport(context)
+        }.getOrDefault(false)
 
     /**
      * Used only before a destructive reboot. `commit()` is deliberate: a reboot
@@ -174,6 +185,20 @@ object AppPreferences {
         val preferences = prefs(context)
         if (preferences.getString(CONSUMED_INSTALL_REQUEST, null) == requestId) return false
         return preferences.edit().putString(CONSUMED_INSTALL_REQUEST, requestId).commit()
+    }
+
+    internal fun registerPreferenceListener(
+        context: Context,
+        listener: SharedPreferences.OnSharedPreferenceChangeListener,
+    ) {
+        prefs(context).registerOnSharedPreferenceChangeListener(listener)
+    }
+
+    internal fun unregisterPreferenceListener(
+        context: Context,
+        listener: SharedPreferences.OnSharedPreferenceChangeListener,
+    ) {
+        prefs(context).unregisterOnSharedPreferenceChangeListener(listener)
     }
 
     private fun prefs(context: Context) =
