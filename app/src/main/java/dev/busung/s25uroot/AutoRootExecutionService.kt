@@ -29,10 +29,11 @@ import kotlinx.coroutines.launch
 /**
  * ZZI4-only fresh foreground execution phase.
  *
- * The lightweight boot gate stays alive through the long stabilization period.
- * This service is promoted shortly before the Manual-equivalent launch floor,
- * then waits on absolute monotonic uptime before binding the existing executor.
- * No exploit log, history entry, payload timing, or FOPS timing is added here.
+ * The lightweight boot gate stays alive through the stabilization period. This
+ * service is promoted exactly ARM_LEAD_MILLIS before the absolute monotonic
+ * launch target computed once by BOOT_COMPLETED, then waits for that target
+ * before binding the existing executor. No exploit log, history entry, payload
+ * timing, or FOPS timing is added here.
  */
 class AutoRootExecutionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -90,7 +91,7 @@ class AutoRootExecutionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannels()
+        ensureNotificationChannels(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -125,9 +126,20 @@ class AutoRootExecutionService : Service() {
         }
         pendingBootToken = bootToken
 
-        val initial = buildExecutionNotification(
+        val launchTargetElapsedRealtime = intent?.getLongExtra(
+            EXTRA_LAUNCH_TARGET_ELAPSED_REALTIME,
+            MIN_LAUNCH_UPTIME_MILLIS,
+        ) ?: MIN_LAUNCH_UPTIME_MILLIS
+        val effectiveLaunchTarget =
+            if (launchTargetElapsedRealtime > 0L) {
+                launchTargetElapsedRealtime
+            } else {
+                MIN_LAUNCH_UPTIME_MILLIS
+            }
+
+        val initial = buildProgressNotification(
+            this,
             getString(R.string.autoroot_checking_firmware),
-            ongoing = true,
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -142,7 +154,7 @@ class AutoRootExecutionService : Service() {
         stopService(Intent(this, AutoRootService::class.java))
         getSystemService(NotificationManager::class.java).cancel(AUTO_ROOT_NOTIFICATION_ID)
 
-        runJob = scope.launch { runExecution(bootToken) }
+        runJob = scope.launch { runExecution(bootToken, effectiveLaunchTarget) }
         return START_NOT_STICKY
     }
 
@@ -161,14 +173,17 @@ class AutoRootExecutionService : Service() {
         super.onDestroy()
     }
 
-    private suspend fun runExecution(initialBootToken: String) {
+    private suspend fun runExecution(
+        initialBootToken: String,
+        launchTargetElapsedRealtime: Long,
+    ) {
         val wakeLock = getSystemService(PowerManager::class.java).newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "$packageName:AutoRootExecution",
         )
         wakeLock.acquire(MAX_EXECUTION_WAKELOCK_MILLIS)
         try {
-            waitUntilExactUptime(LAUNCH_UPTIME_SECONDS)
+            waitUntilElapsedRealtime(launchTargetElapsedRealtime)
 
             if (!AppPreferences.autoRootEnabled(this)) {
                 stopWithoutResult()
@@ -223,8 +238,7 @@ class AutoRootExecutionService : Service() {
         }
     }
 
-    private suspend fun waitUntilExactUptime(seconds: Int) {
-        val targetMillis = seconds * 1_000L
+    private suspend fun waitUntilElapsedRealtime(targetMillis: Long) {
         while (true) {
             val remaining = targetMillis - SystemClock.elapsedRealtime()
             if (remaining <= 0L) return
@@ -247,26 +261,13 @@ class AutoRootExecutionService : Service() {
     }
 
     private fun updateExecutionNotification(message: String) {
-        getSystemService(NotificationManager::class.java).notify(
-            EXECUTION_NOTIFICATION_ID,
-            buildExecutionNotification(message, ongoing = true),
-        )
+        postProgressNotification(this, message)
     }
 
     private fun finishWithResult(message: String, offerSoftReboot: Boolean = false) {
         if (shuttingDown) return
         shuttingDown = true
-        getSystemService(NotificationManager::class.java).apply {
-            // AutoRootExecutorService still publishes legacy stage progress under
-            // 43499. Clear that terminally so "Verifying KernelSU…" cannot be
-            // orphaned after the split execution service posts the final result.
-            cancel(AUTO_ROOT_NOTIFICATION_ID)
-            cancel(EXECUTION_NOTIFICATION_ID)
-            notify(
-                RESULT_NOTIFICATION_ID,
-                buildResultNotification(message, offerSoftReboot),
-            )
-        }
+        postResultNotification(this, message, offerSoftReboot)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -282,96 +283,17 @@ class AutoRootExecutionService : Service() {
         stopSelf()
     }
 
-    private fun buildExecutionNotification(
-        message: String,
-        ongoing: Boolean,
-    ): android.app.Notification =
-        NotificationCompat.Builder(this, EXECUTION_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_app_logo)
-            .setContentTitle(getString(R.string.autoroot_notification_title))
-            .setContentText(message)
-            .setContentIntent(mainPendingIntent())
-            .setOnlyAlertOnce(true)
-            .setOngoing(ongoing)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(0, getString(R.string.autoroot_disable), disablePendingIntent())
-            .build()
-
-    private fun buildResultNotification(
-        message: String,
-        offerSoftReboot: Boolean,
-    ): android.app.Notification {
-        val builder = NotificationCompat.Builder(this, RESULT_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_app_logo)
-            .setContentTitle(getString(R.string.autoroot_notification_title))
-            .setContentText(message)
-            .setContentIntent(mainPendingIntent())
-            .setOnlyAlertOnce(true)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-
-        if (offerSoftReboot) {
-            builder.addAction(
-                0,
-                getString(R.string.autoroot_apply_modules),
-                PendingIntent.getBroadcast(
-                    this,
-                    2,
-                    Intent(this, AutoRootActionReceiver::class.java)
-                        .setAction(AutoRootActionReceiver.ACTION_APPLY_MODULES_SOFT_REBOOT),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                ),
-            )
-        }
-        return builder.build()
-    }
-
-    private fun mainPendingIntent(): PendingIntent =
-        PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-
-    private fun disablePendingIntent(): PendingIntent =
-        PendingIntent.getBroadcast(
-            this,
-            1,
-            Intent(this, AutoRootActionReceiver::class.java)
-                .setAction(AutoRootActionReceiver.ACTION_DISABLE_AUTO_ROOT),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-
-    private fun createNotificationChannels() {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(
-                EXECUTION_CHANNEL_ID,
-                getString(R.string.autoroot_execution_channel_name),
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply {
-                description = getString(R.string.autoroot_execution_channel_description)
-                setShowBadge(false)
-            },
-        )
-        manager.createNotificationChannel(
-            NotificationChannel(
-                RESULT_CHANNEL_ID,
-                getString(R.string.autoroot_result_channel_name),
-                NotificationManager.IMPORTANCE_HIGH,
-            ).apply {
-                description = getString(R.string.autoroot_result_channel_description)
-            },
-        )
-    }
-
     companion object {
         const val EXTRA_BOOT_TOKEN = "dev.busung.s25uroot.extra.AUTO_ROOT_EXECUTION_BOOT_TOKEN"
+        const val EXTRA_LAUNCH_TARGET_ELAPSED_REALTIME =
+            "dev.busung.s25uroot.extra.AUTO_ROOT_LAUNCH_TARGET_ELAPSED_REALTIME"
         const val EXECUTION_NOTIFICATION_ID = 43500
         const val RESULT_NOTIFICATION_ID = 43502
-        const val ARM_UPTIME_SECONDS = 118
-        private const val LAUNCH_UPTIME_SECONDS = 120
+
+        const val MIN_LAUNCH_UPTIME_MILLIS = 120_000L
+        const val POST_BOOT_GUARD_MILLIS = 75_000L
+        const val ARM_LEAD_MILLIS = 2_000L
+
         private const val EXECUTION_CHANNEL_ID = "auto_root_execution"
         private const val RESULT_CHANNEL_ID = "auto_root_result"
         private const val EXECUTOR_CONNECT_TIMEOUT_MILLIS = 10_000L
@@ -382,5 +304,125 @@ class AutoRootExecutionService : Service() {
             snapshot.device == "pa3q" &&
                 snapshot.model.equals("SM-S938B", ignoreCase = true) &&
                 snapshot.buildId.contains("S938BXXUCZZI4", ignoreCase = true)
+
+        fun computeLaunchTargetElapsedRealtime(bootCompletedElapsedRealtime: Long): Long =
+            maxOf(
+                MIN_LAUNCH_UPTIME_MILLIS,
+                bootCompletedElapsedRealtime + POST_BOOT_GUARD_MILLIS,
+            )
+
+        internal fun postProgressNotification(context: Context, message: String) {
+            // The split host creates this channel in onCreate(). Avoid recreating
+            // channels on every stage transition immediately around the race.
+            context.getSystemService(NotificationManager::class.java).notify(
+                EXECUTION_NOTIFICATION_ID,
+                buildProgressNotification(context, message),
+            )
+        }
+
+        internal fun postResultNotification(
+            context: Context,
+            message: String,
+            offerSoftReboot: Boolean,
+        ) {
+            ensureNotificationChannels(context)
+            context.getSystemService(NotificationManager::class.java).apply {
+                cancel(AUTO_ROOT_NOTIFICATION_ID)
+                cancel(EXECUTION_NOTIFICATION_ID)
+                notify(
+                    RESULT_NOTIFICATION_ID,
+                    buildResultNotification(context, message, offerSoftReboot),
+                )
+            }
+        }
+
+        private fun buildProgressNotification(
+            context: Context,
+            message: String,
+        ): android.app.Notification =
+            NotificationCompat.Builder(context, EXECUTION_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_app_logo)
+                .setContentTitle(context.getString(R.string.autoroot_notification_title))
+                .setContentText(message)
+                .setContentIntent(mainPendingIntent(context))
+                .setOnlyAlertOnce(true)
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .addAction(
+                    0,
+                    context.getString(R.string.autoroot_disable),
+                    disablePendingIntent(context),
+                )
+                .build()
+
+        private fun buildResultNotification(
+            context: Context,
+            message: String,
+            offerSoftReboot: Boolean,
+        ): android.app.Notification {
+            val builder = NotificationCompat.Builder(context, RESULT_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_app_logo)
+                .setContentTitle(context.getString(R.string.autoroot_notification_title))
+                .setContentText(message)
+                .setContentIntent(mainPendingIntent(context))
+                .setOnlyAlertOnce(true)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+
+            if (offerSoftReboot) {
+                builder.addAction(
+                    0,
+                    context.getString(R.string.autoroot_apply_modules),
+                    PendingIntent.getBroadcast(
+                        context,
+                        2,
+                        Intent(context, AutoRootActionReceiver::class.java)
+                            .setAction(AutoRootActionReceiver.ACTION_APPLY_MODULES_SOFT_REBOOT),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    ),
+                )
+            }
+            return builder.build()
+        }
+
+        private fun mainPendingIntent(context: Context): PendingIntent =
+            PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+        private fun disablePendingIntent(context: Context): PendingIntent =
+            PendingIntent.getBroadcast(
+                context,
+                1,
+                Intent(context, AutoRootActionReceiver::class.java)
+                    .setAction(AutoRootActionReceiver.ACTION_DISABLE_AUTO_ROOT),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+        private fun ensureNotificationChannels(context: Context) {
+            val manager = context.getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    EXECUTION_CHANNEL_ID,
+                    context.getString(R.string.autoroot_execution_channel_name),
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply {
+                    description = context.getString(R.string.autoroot_execution_channel_description)
+                    setShowBadge(false)
+                },
+            )
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    RESULT_CHANNEL_ID,
+                    context.getString(R.string.autoroot_result_channel_name),
+                    NotificationManager.IMPORTANCE_HIGH,
+                ).apply {
+                    description = context.getString(R.string.autoroot_result_channel_description)
+                },
+            )
+        }
     }
 }

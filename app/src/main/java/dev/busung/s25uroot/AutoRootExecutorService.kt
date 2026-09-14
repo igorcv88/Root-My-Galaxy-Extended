@@ -45,6 +45,9 @@ open class AutoRootExecutorService : Service() {
         }.asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private var runJob: Job? = null
+    private val splitExecution: Boolean by lazy(LazyThreadSafetyMode.NONE) {
+        AutoRootExecutionService.shouldUseSplitExecution(DeviceSnapshot.current())
+    }
 
     private val commandHandler = Handler(Looper.getMainLooper()) { message ->
         when (message.what) {
@@ -319,16 +322,25 @@ open class AutoRootExecutorService : Service() {
         }
     }
 
+    private fun isSplitExecution(): Boolean = splitExecution
+
     private fun updateNotification(message: String) {
-        getSystemService(NotificationManager::class.java).notify(
-            AUTO_ROOT_NOTIFICATION_ID,
-            buildNotification(message, ongoing = true),
-        )
+        if (isSplitExecution()) {
+            // The split foreground host owns one progress notification (43500).
+            // Reuse that same ID/channel for every stage instead of creating a
+            // second legacy 43499 notification beside it.
+            AutoRootExecutionService.postProgressNotification(this, message)
+        } else {
+            getSystemService(NotificationManager::class.java).notify(
+                AUTO_ROOT_NOTIFICATION_ID,
+                buildNotification(message, ongoing = true),
+            )
+        }
     }
 
     /** Let the already-running foreground gate own the terminal notification. */
     private fun resultHostClass(): Class<out Service> =
-        if (AutoRootExecutionService.shouldUseSplitExecution(DeviceSnapshot.current())) {
+        if (isSplitExecution()) {
             AutoRootExecutionService::class.java
         } else {
             AutoRootService::class.java
@@ -341,14 +353,22 @@ open class AutoRootExecutorService : Service() {
             offerSoftReboot = offerSoftReboot,
         )
         if (!delivered) {
-            getSystemService(NotificationManager::class.java).notify(
-                AUTO_ROOT_NOTIFICATION_ID,
-                buildNotification(
-                    message = message,
-                    ongoing = false,
-                    offerSoftReboot = offerSoftReboot,
-                ),
-            )
+            if (isSplitExecution()) {
+                AutoRootExecutionService.postResultNotification(
+                    this,
+                    message,
+                    offerSoftReboot,
+                )
+            } else {
+                getSystemService(NotificationManager::class.java).notify(
+                    AUTO_ROOT_NOTIFICATION_ID,
+                    buildNotification(
+                        message = message,
+                        ongoing = false,
+                        offerSoftReboot = offerSoftReboot,
+                    ),
+                )
+            }
             stopService(Intent(this, resultHostClass()))
         }
         stopSelf()
@@ -358,7 +378,12 @@ open class AutoRootExecutorService : Service() {
         val delivered = deliverGateResult(message = null, removeNotification = removeNotification)
         if (!delivered) {
             if (removeNotification) {
-                getSystemService(NotificationManager::class.java).cancel(AUTO_ROOT_NOTIFICATION_ID)
+                getSystemService(NotificationManager::class.java).apply {
+                    cancel(AUTO_ROOT_NOTIFICATION_ID)
+                    if (isSplitExecution()) {
+                        cancel(AutoRootExecutionService.EXECUTION_NOTIFICATION_ID)
+                    }
+                }
             }
             stopService(Intent(this, resultHostClass()))
         }
