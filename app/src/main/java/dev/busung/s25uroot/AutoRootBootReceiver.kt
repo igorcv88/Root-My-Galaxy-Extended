@@ -17,11 +17,9 @@ class AutoRootBootReceiver : BroadcastReceiver() {
         val bootCompletedElapsedRealtime = SystemClock.elapsedRealtime()
 
         // Shizuku is a boot utility, not part of root acquisition. Start its
-        // coordinator immediately on every framework BOOT_COMPLETED. After a
-        // KernelSU soft/userspace reboot the same kernel root is still active,
-        // so the service first tries an already-authorized root starter and can
-        // skip Wireless ADB entirely. On a cold boot without root it falls back
-        // to the existing Binder/Wi-Fi/ADB flow.
+        // user-configured coordinator immediately on every framework BOOT_COMPLETED.
+        // Auto Root has a separate priority request below so a shell-required ZZI4
+        // boot is not dependent on the visible "Start Shizuku on boot" toggle.
         runCatching { ShizukuBootService.startIfConfigured(context) }
             .onFailure { error ->
                 Log.w(
@@ -56,6 +54,20 @@ class AutoRootBootReceiver : BroadcastReceiver() {
         if (!AutoRootSupport.shouldRunForBoot(context, bootToken)) {
             stopAutoRootRuntime(context)
             return
+        }
+
+        // ZZI4 requires a real shell transport. Request the priority Shizuku
+        // bootstrap here, before AutoRootService performs cache/hash validation,
+        // so Shizuku gets the entire 180-second post-BOOT_COMPLETED settling window
+        // and cannot be delayed by preparation work in the Auto Root gate.
+        if (isExactZzi4(DeviceSnapshot.current())) {
+            runCatching { ShizukuBootService.startForAutoRoot(context) }
+                .onFailure { error ->
+                    Log.w(
+                        TAG,
+                        "Unable to launch ZZI4 priority Shizuku bootstrap: ${error.message ?: error.javaClass.simpleName}",
+                    )
+                }
         }
 
         context.startForegroundService(
