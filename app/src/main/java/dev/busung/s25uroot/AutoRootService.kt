@@ -15,6 +15,7 @@ import android.os.IBinder
 import android.os.Message
 import android.os.Messenger
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.util.UUID
@@ -34,10 +35,10 @@ internal const val AUTO_ROOT_CHANNEL_ID = "auto_root_postboot"
  * Foreground boot gate for Auto Root.
  *
  * BOOT_COMPLETED is the Android-readiness signal. The gate owns the foreground
- * lifecycle and minimum-uptime wait. Standalone targets still execute through a
- * fresh :autoroot_exec process. Targets that require shell are dispatched to the
- * default/provider process so they use the authoritative Shizuku Binder there;
- * the exploit itself still runs remotely with shell identity.
+ * lifecycle and target-specific stabilization wait. Standalone targets still
+ * execute through a fresh :autoroot_exec process. Targets that require shell are
+ * dispatched to the default/provider process so they can consume the authoritative
+ * Shizuku Binder there; the exploit itself still runs remotely with shell identity.
  */
 class AutoRootService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -48,6 +49,7 @@ class AutoRootService : Service() {
     private var executorConnected = false
     private var shuttingDown = false
     private var pendingBootToken: String? = null
+    private var bootCompletedElapsedRealtime: Long? = null
 
     private val executorConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -123,6 +125,11 @@ class AutoRootService : Service() {
 
         if (runJob?.isActive == true || executorBound) return START_NOT_STICKY
 
+        bootCompletedElapsedRealtime = intent
+            ?.getLongExtra(EXTRA_BOOT_COMPLETED_ELAPSED_REALTIME, -1L)
+            ?.takeIf { it >= 0L }
+            ?: SystemClock.elapsedRealtime()
+
         val initial = buildNotification(getString(R.string.autoroot_stabilizing_android), ongoing = true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -178,11 +185,13 @@ class AutoRootService : Service() {
                 getString(R.string.autoroot_prior_install_required)
             }
 
+            val device = DeviceSnapshot.current()
             val shellTransportRequired = AutoRootSupport.requiresShellTransport(this)
             if (shellTransportRequired) {
-                // On ZZI4 the exploit route needs u:r:shell:s0 for tracefs. Start
-                // Shizuku before the uptime gate instead of letting the two boot
-                // automations race each other.
+                // Bring Shizuku up at the start of the post-boot settling period,
+                // not beside the scheduler-sensitive exploit. The ZZI4 barrier
+                // below explicitly stops this coordinator before executor handoff;
+                // stopping the coordinator never stops an already-running Shizuku server.
                 ShizukuBootService.startForAutoRoot(this)
                 Log.i(TAG, "Auto Root target requires shell transport; prioritizing Shizuku bootstrap")
             }
@@ -194,13 +203,29 @@ class AutoRootService : Service() {
                 return
             }
 
-            if (isExactCzg3(DeviceSnapshot.current())) {
-                // Auto Root has its own conservative floor. Do not reuse the
-                // Manual "Diagnostic Launch Time" preference: changing automatic
-                // boot latency must not silently change Manual Standalone behavior.
-                DiagnosticUptime.waitUntil(AppPreferences.autoRootBootMinUptimeSeconds(this))
-            } else {
-                delay(LEGACY_STABILIZATION_DELAY_MILLIS)
+            when {
+                isExactZzi4(device) -> {
+                    val bootCompletedAt = bootCompletedElapsedRealtime ?: SystemClock.elapsedRealtime()
+                    val target = bootCompletedAt + ZZI4_POST_BOOT_STABILIZATION_MILLIS
+                    Log.i(
+                        TAG,
+                        "ZZI4 Auto Root settling until 180s after BOOT_COMPLETED before exploit preparation",
+                    )
+                    waitUntilElapsedRealtime(target)
+
+                    // The bootstrap has had the full post-boot window to produce a
+                    // Binder. End any still-running RMG coordinator and give its
+                    // Wi-Fi/mDNS/ADB cleanup a deterministic quiet interval before
+                    // transport selection. The executor must not restart it.
+                    ShizukuBootService.stop(this)
+                    delay(ZZI4_SHIZUKU_SETTLE_QUIET_MILLIS)
+                }
+                isExactCzg3(device) -> {
+                    // Keep the validated CZG3 total-kernel-uptime policy separate
+                    // from ZZI4's post-BOOT_COMPLETED Auto Root policy.
+                    DiagnosticUptime.waitUntil(AppPreferences.autoRootBootMinUptimeSeconds(this))
+                }
+                else -> delay(LEGACY_STABILIZATION_DELAY_MILLIS)
             }
 
             if (!AppPreferences.autoRootEnabled(this)) {
@@ -262,6 +287,14 @@ class AutoRootService : Service() {
             finishWithResult(getString(R.string.autoroot_failed, detail))
         } finally {
             if (wakeLock.isHeld) wakeLock.release()
+        }
+    }
+
+    private suspend fun waitUntilElapsedRealtime(targetMillis: Long) {
+        while (true) {
+            val remaining = targetMillis - SystemClock.elapsedRealtime()
+            if (remaining <= 0L) return
+            delay(minOf(remaining, 1_000L))
         }
     }
 
@@ -401,8 +434,12 @@ class AutoRootService : Service() {
         const val EXTRA_RESULT_MESSAGE = "executor_result_message"
         const val EXTRA_REMOVE_NOTIFICATION = "executor_remove_notification"
         const val EXTRA_OFFER_SOFT_REBOOT = "executor_offer_soft_reboot"
+        const val EXTRA_BOOT_COMPLETED_ELAPSED_REALTIME =
+            "dev.busung.s25uroot.extra.BOOT_COMPLETED_ELAPSED_REALTIME"
 
         private const val TAG = "RootMyGalaxyAutoRootGate"
+        private const val ZZI4_POST_BOOT_STABILIZATION_MILLIS = 180_000L
+        private const val ZZI4_SHIZUKU_SETTLE_QUIET_MILLIS = 10_000L
         private const val LEGACY_STABILIZATION_DELAY_MILLIS = 45_000L
         private const val EXECUTOR_CONNECT_TIMEOUT_MILLIS = 10_000L
         private const val EXECUTOR_RESULT_GRACE_MILLIS = 1_500L
