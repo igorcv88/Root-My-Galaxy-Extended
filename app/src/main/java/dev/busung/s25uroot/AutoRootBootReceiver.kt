@@ -16,58 +16,51 @@ class AutoRootBootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
         val bootCompletedElapsedRealtime = SystemClock.elapsedRealtime()
 
-        // Shizuku is a boot utility, not part of root acquisition. Start its
-        // user-configured coordinator immediately on every framework BOOT_COMPLETED.
-        // Auto Root has a separate priority request below so a shell-required ZZI4
-        // boot is not dependent on the visible "Start Shizuku on boot" toggle.
-        runCatching { ShizukuBootService.startIfConfigured(context) }
-            .onFailure { error ->
-                Log.w(
-                    TAG,
-                    "Unable to launch early Shizuku bootstrap: ${error.message ?: error.javaClass.simpleName}",
-                )
-            }
-
         // Kernel boot_id changes only on a real kernel reboot. A userspace/zygote
         // soft reboot may re-emit BOOT_COMPLETED while keeping this token intact.
-        // Consume each kernel boot event once and hard-stop stale Auto Root runtime
-        // on duplicates instead of starting another foreground gate. This gate is
-        // deliberately independent from the Shizuku bootstrap above.
-        val bootToken = AutoRootSupport.currentBootToken() ?: return
+        // On duplicate framework boot events Auto Root must stay stopped, while the
+        // user's independent Shizuku-on-boot preference remains free to run.
+        val bootToken = AutoRootSupport.currentBootToken()
+        if (bootToken == null) {
+            launchBootShizuku(context, autoRootPriority = false)
+            return
+        }
         if (!AutoRootSupport.claimBootCompletedForKernel(context, bootToken)) {
+            launchBootShizuku(context, autoRootPriority = false)
             stopAutoRootRuntime(context)
             return
         }
 
-        if (!AppPreferences.autoRootEnabled(context)) return
+        val autoRootEnabled = AppPreferences.autoRootEnabled(context)
+        val alreadyAttempted = AutoRootSupport.hasAttemptedBoot(context, bootToken)
+        val autoRootEligible = autoRootEnabled &&
+            !alreadyAttempted &&
+            AutoRootSupport.shouldRunForBoot(context, bootToken)
+        val autoRootOwnsShizuku = autoRootEligible &&
+            AppPreferences.shizukuBootRequiredByAutoRoot(context)
+
+        // Exactly one boot coordinator owns the startup request. If this Auto Root
+        // run needs a shell transport, its priority bootstrap supersedes the visible
+        // Start Shizuku on boot preference for this boot only. Otherwise the user's
+        // independent preference is honored. The stored preference is never changed.
+        launchBootShizuku(context, autoRootPriority = autoRootOwnsShizuku)
+
+        if (!autoRootEnabled) return
 
         // A previous Auto Root attempt in this same kernel boot also makes any
         // later framework BOOT_COMPLETED ineligible, including after an app update
         // where the new boot-event marker did not exist at the first boot event.
-        if (AutoRootSupport.hasAttemptedBoot(context, bootToken)) {
+        if (alreadyAttempted) {
             stopAutoRootRuntime(context)
             return
         }
 
-        // Keep BOOT_COMPLETED deliberately tiny: no payload hashing, network or
-        // file walking here. The foreground gate performs full cache validation.
-        if (!AutoRootSupport.shouldRunForBoot(context, bootToken)) {
+        // Keep BOOT_COMPLETED deliberately tiny: no network or file walking here.
+        // The foreground gate performs full payload/cache validation. The lightweight
+        // route-policy read above only decides which Shizuku coordinator owns boot.
+        if (!autoRootEligible) {
             stopAutoRootRuntime(context)
             return
-        }
-
-        // ZZI4 requires a real shell transport. Request the priority Shizuku
-        // bootstrap here, before AutoRootService performs cache/hash validation,
-        // so Shizuku gets the entire 180-second post-BOOT_COMPLETED settling window
-        // and cannot be delayed by preparation work in the Auto Root gate.
-        if (isExactZzi4(DeviceSnapshot.current())) {
-            runCatching { ShizukuBootService.startForAutoRoot(context) }
-                .onFailure { error ->
-                    Log.w(
-                        TAG,
-                        "Unable to launch ZZI4 priority Shizuku bootstrap: ${error.message ?: error.javaClass.simpleName}",
-                    )
-                }
         }
 
         context.startForegroundService(
@@ -77,6 +70,25 @@ class AutoRootBootReceiver : BroadcastReceiver() {
                     bootCompletedElapsedRealtime,
                 ),
         )
+    }
+
+    private fun launchBootShizuku(context: Context, autoRootPriority: Boolean) {
+        runCatching {
+            if (autoRootPriority) {
+                ShizukuBootService.startForAutoRoot(context)
+            } else {
+                ShizukuBootService.startIfConfigured(context)
+            }
+        }.onFailure { error ->
+            Log.w(
+                TAG,
+                if (autoRootPriority) {
+                    "Unable to launch Auto Root priority Shizuku bootstrap: ${error.message ?: error.javaClass.simpleName}"
+                } else {
+                    "Unable to launch configured Shizuku bootstrap: ${error.message ?: error.javaClass.simpleName}"
+                },
+            )
+        }
     }
 
     private fun stopAutoRootRuntime(context: Context) {
