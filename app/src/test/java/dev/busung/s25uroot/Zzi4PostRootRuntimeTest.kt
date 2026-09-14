@@ -109,4 +109,48 @@ class Zzi4PostRootRuntimeTest {
         assertTrue(source.contains("remoteArtifactMatches"))
         assertTrue(source.contains("session.remove(KSUD_STAGE_PATH)"))
     }
+    @Test
+    fun zzi4PreStageReusesVerifiedStableKsudBeforeRefreshingIt() {
+        val manual = File("src/main/java/dev/busung/s25uroot/InstallViewModel.kt").readText()
+        val auto = File("src/main/java/dev/busung/s25uroot/AutoRootRunner.kt").readText()
+
+        val manualLocalCheck = manual.indexOf("val current = session.shell(verifyCommand)")
+        val manualLocalWrite = manual.indexOf(
+            "session.push(payloads.kernelSu, SHIZUKU_KSUD_PATH, executable = true)",
+            manualLocalCheck,
+        )
+        val manualShizukuCheck = manual.indexOf("val current = ShizukuController.shell(verifyCommand)")
+        val manualShizukuWrite = manual.indexOf(
+            "ShizukuController.writeFile(",
+            manualShizukuCheck,
+        )
+        assertTrue(manualLocalCheck >= 0)
+        assertTrue(manualLocalWrite > manualLocalCheck)
+        assertTrue(manualShizukuCheck >= 0)
+        assertTrue(manualShizukuWrite > manualShizukuCheck)
+        assertTrue(manual.contains("reusedExisting"))
+        assertTrue(manual.contains("action="))
+        assertTrue(manual.contains("ZZI4 Local ADB pin unavailable: adbPaired=false"))
+
+        val autoShizukuCheck = auto.indexOf(
+            "val current = ShizukuController.shell(zzi4KernelSuVerifyCommand())",
+        )
+        val autoShizukuWrite = auto.indexOf(
+            "ShizukuController.writeFile(KSUD_PATH, \"755\", payloads.kernelSu.inputStream())",
+            autoShizukuCheck,
+        )
+        val autoLocalCheck = auto.indexOf("val current = session.shell(zzi4KernelSuVerifyCommand())")
+        val autoLocalWrite = auto.indexOf(
+            "session.push(payloads.kernelSu, KSUD_PATH, executable = true)",
+            autoLocalCheck,
+        )
+        assertTrue(autoShizukuCheck >= 0)
+        assertTrue(autoShizukuWrite > autoShizukuCheck)
+        assertTrue(autoLocalCheck >= 0)
+        assertTrue(autoLocalWrite > autoLocalCheck)
+        assertTrue(auto.contains("zzi4KernelSuPreStageMatches"))
+        assertTrue(auto.contains("action = \"reuse\""))
+        assertTrue(auto.contains("action = \"refresh\""))
+    }
+
 }

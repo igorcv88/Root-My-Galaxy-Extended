@@ -330,6 +330,9 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             appendLog("[*] ZZI4 Manual transport pinned to paired Local ADB shell")
             return ManualRunTransport.LocalAdb
         }
+        if (profile.profileId == "pa3q-S938BXXUCZZI4" && shellRequired && !localAdbPaired) {
+            appendLog("[*] ZZI4 Local ADB pin unavailable: adbPaired=false; evaluating Shizuku shell")
+        }
 
         val requestedShizuku = AppPreferences.shizukuMode(app)
         var shizukuUsable = false
@@ -408,19 +411,38 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         val expectedSha256 = artifact.sha256
         val expectedSize = artifact.size
         val verifyCommand =
-    "set -e; " +
-        "/system/bin/toybox sha256sum ${shellQuote(SHIZUKU_KSUD_PATH)} | " +
-        "/system/bin/toybox cut -d ' ' -f 1; " +
-        "/system/bin/toybox wc -c < ${shellQuote(SHIZUKU_KSUD_PATH)}"
+            "set -e; " +
+                "/system/bin/toybox sha256sum ${shellQuote(SHIZUKU_KSUD_PATH)} | " +
+                "/system/bin/toybox cut -d ' ' -f 1; " +
+                "/system/bin/toybox wc -c < ${shellQuote(SHIZUKU_KSUD_PATH)}"
+        var reusedExisting = false
 
         val verification = when (runTransport()) {
             ManualRunTransport.LocalAdb -> {
                 val session = requireNotNull(activeLocalAdbSession) {
                     "Manual Local ADB session disappeared before KernelSU pre-stage"
                 }
+                // The root helper consumes the stable KSUD_PATH. Remove only the
+                // transient stage first, then verify the stable artifact before
+                // doing any multi-megabyte write immediately ahead of the race.
                 session.remove(SHIZUKU_KSUD_STAGE_PATH)
-                session.push(payloads.kernelSu, SHIZUKU_KSUD_PATH, executable = true)
-                session.shell(verifyCommand)
+                val current = session.shell(verifyCommand)
+                if (
+                    current.exitCode == 0 &&
+                    remoteArtifactMatches(current.output, expectedSha256, expectedSize)
+                ) {
+                    val chmod = session.shell(
+                        "/system/bin/chmod 755 ${shellQuote(SHIZUKU_KSUD_PATH)}",
+                    )
+                    require(chmod.exitCode == 0) {
+                        "Unable to restore executable mode on verified ZZI4 KernelSU bootstrap: ${chmod.output}"
+                    }
+                    reusedExisting = true
+                    current
+                } else {
+                    session.push(payloads.kernelSu, SHIZUKU_KSUD_PATH, executable = true)
+                    session.shell(verifyCommand)
+                }
             }
             ManualRunTransport.Shizuku -> {
                 val cleanup = ShizukuController.shell(
@@ -429,12 +451,27 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 require(cleanup.exitCode == 0) {
                     "Unable to clear stale KernelSU stage before ZZI4 exploit: ${cleanup.output}"
                 }
-                ShizukuController.writeFile(
-                    SHIZUKU_KSUD_PATH,
-                    "755",
-                    payloads.kernelSu.inputStream(),
-                )
-                ShizukuController.shell(verifyCommand)
+                val current = ShizukuController.shell(verifyCommand)
+                if (
+                    current.exitCode == 0 &&
+                    remoteArtifactMatches(current.output, expectedSha256, expectedSize)
+                ) {
+                    val chmod = ShizukuController.shell(
+                        "/system/bin/chmod 755 ${shellQuote(SHIZUKU_KSUD_PATH)}",
+                    )
+                    require(chmod.exitCode == 0) {
+                        "Unable to restore executable mode on verified ZZI4 KernelSU bootstrap: ${chmod.output}"
+                    }
+                    reusedExisting = true
+                    current
+                } else {
+                    ShizukuController.writeFile(
+                        SHIZUKU_KSUD_PATH,
+                        "755",
+                        payloads.kernelSu.inputStream(),
+                    )
+                    ShizukuController.shell(verifyCommand)
+                }
             }
             ManualRunTransport.App -> {
                 error("ZZI4 KernelSU pre-stage requires a real shell transport")
@@ -450,7 +487,8 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         }
         appendLog(
             "[+] ZZI4 pre-exploit KernelSU bootstrap verified " +
-                "sha256=$expectedSha256 size=$expectedSize",
+                "sha256=$expectedSha256 size=$expectedSize " +
+                "action=${if (reusedExisting) "reuse" else "refresh"}",
         )
     }
 
