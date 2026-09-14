@@ -22,6 +22,108 @@ jobs:
       - name: Apply ZZI4 no-prestage hot-path patch
         run: python3 tools/apply-zzi4-no-prestage-hotpath.py
 
+      - name: Retire obsolete pre-stage contract tests
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          manual_path = Path('app/src/main/java/dev/busung/s25uroot/InstallViewModel.kt')
+          manual = manual_path.read_text(encoding='utf-8')
+          manual, count = re.subn(
+              r'\ninternal fun remoteArtifactMatches\(.*?\n\}\n',
+              '\n',
+              manual,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'remoteArtifactMatches removal: expected 1, found {count}')
+          manual_path.write_text(manual, encoding='utf-8')
+
+          Path('app/src/test/java/dev/busung/s25uroot/Zzi4KernelSuPrestageTest.kt').write_text(r'''package dev.busung.s25uroot
+
+import java.io.File
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class Zzi4KernelSuPrestageTest {
+    @Test
+    fun manualZzi4ExploitRunsBeforeAnyKernelSuStage() {
+        val source = File("src/main/java/dev/busung/s25uroot/InstallViewModel.kt").readText()
+        val start = source.indexOf("private suspend fun runExploitAndKernelSu")
+        val end = source.indexOf("private suspend fun executeExploit", start)
+        assertTrue(start >= 0)
+        assertTrue(end > start)
+        val body = source.substring(start, end)
+
+        assertFalse(body.contains("preStageKernelSu"))
+        assertFalse(body.contains("SHIZUKU_KSUD"))
+        assertFalse(body.contains("sha256sum"))
+        assertFalse(body.contains("wc -c"))
+        assertTrue(body.indexOf("executeExploit(") < body.indexOf("installKernelSu(payloads)"))
+    }
+
+    @Test
+    fun manualKernelSuStageAndLateLoadRemainPostRoot() {
+        val source = File("src/main/java/dev/busung/s25uroot/InstallViewModel.kt").readText()
+        assertFalse(source.contains("private fun preStageKernelSuForAutoLateLoad"))
+        assertFalse(source.contains("remoteArtifactMatches"))
+        assertTrue(source.contains("val stage = runHelper(\"-c\", kernelSuStageCommand(payloads))"))
+        assertTrue(source.contains("runHelper(\"--late-load\")"))
+        assertTrue(source.contains("KernelSuGlobalReadiness.command(bootToken)"))
+    }
+}
+''', encoding='utf-8')
+
+          Path('app/src/test/java/dev/busung/s25uroot/Zzi4PrestageVerificationCommandTest.kt').write_text(r'''package dev.busung.s25uroot
+
+import java.io.File
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class Zzi4PrestageVerificationCommandTest {
+    @Test
+    fun autoRootZzi4HotPathHasNoKsudVerificationOrWrite() {
+        val source = File("src/main/java/dev/busung/s25uroot/AutoRootRunner.kt").readText()
+
+        val shizukuStart = source.indexOf("private suspend fun executeExploit(")
+        val localStart = source.indexOf("private suspend fun executeExploitViaLocalAdb", shizukuStart)
+        val localEnd = source.indexOf("private fun shizukuStage", localStart)
+        assertTrue(shizukuStart >= 0)
+        assertTrue(localStart > shizukuStart)
+        assertTrue(localEnd > localStart)
+
+        val shizukuHotPath = source.substring(shizukuStart, localStart)
+        val localHotPath = source.substring(localStart, localEnd)
+        for (hotPath in listOf(shizukuHotPath, localHotPath)) {
+            assertFalse(hotPath.contains("preStageZzi4KernelSu"))
+            assertFalse(hotPath.contains("KSUD_PATH"))
+            assertFalse(hotPath.contains("sha256sum"))
+            assertFalse(hotPath.contains("wc -c"))
+        }
+        assertFalse(source.contains("zzi4KernelSuVerifyCommand"))
+        assertFalse(source.contains("private fun preStageZzi4KernelSu"))
+    }
+
+    @Test
+    fun autoRootKeepsPostRootStageAndExplicitLateLoadFallback() {
+        val source = File("src/main/java/dev/busung/s25uroot/AutoRootRunner.kt").readText()
+        val runStart = source.indexOf("suspend fun run(")
+        val runEnd = source.indexOf("private suspend fun verifyKernelSu", runStart)
+        val runBody = source.substring(runStart, runEnd)
+
+        assertTrue(runBody.indexOf("executeExploit(") < runBody.indexOf("withKernelSuClient"))
+        assertTrue(source.contains("stageKernelSuRequired(payloads, ksuExec)"))
+        assertTrue(source.contains("ksuExec(arrayOf(\"--late-load\"))"))
+        assertTrue(source.contains("verifyKernelSu(bootToken, ksuExec, postRootExec)"))
+    }
+}
+''', encoding='utf-8')
+          PY
+
       - name: Java 21
         uses: actions/setup-java@v6
         with:
@@ -48,7 +150,9 @@ jobs:
           git add \
             app/src/main/java/dev/busung/s25uroot/InstallViewModel.kt \
             app/src/main/java/dev/busung/s25uroot/AutoRootRunner.kt \
-            app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt
+            app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt \
+            app/src/test/java/dev/busung/s25uroot/Zzi4KernelSuPrestageTest.kt \
+            app/src/test/java/dev/busung/s25uroot/Zzi4PrestageVerificationCommandTest.kt
           git diff --cached --check
           git commit -m 'Keep ZZI4 KernelSU staging out of exploit hot path'
           git push
