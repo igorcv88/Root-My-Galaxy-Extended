@@ -1,6 +1,7 @@
 package dev.busung.s25uroot
 
 import android.content.Intent
+import android.content.SharedPreferences
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +28,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,7 +42,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-/** Settings surface for RMG's independent, optional pre-root Shizuku bootstrap. */
+/** Settings surface for RMG's boot-time Shizuku coordinator. */
 @Composable
 internal fun ShizukuBootSettingsCard() {
     val context = LocalContext.current
@@ -48,12 +50,27 @@ internal fun ShizukuBootSettingsCard() {
     val forgetDoneText = stringResource(R.string.wireless_adb_forget_done)
     val forgetFailedText = stringResource(R.string.wireless_adb_forget_failed)
     val pairingSearchingText = stringResource(R.string.adb_pair_searching)
-    var enabled by remember { mutableStateOf(AppPreferences.startShizukuOnBoot(context)) }
+    var storedEnabled by remember { mutableStateOf(AppPreferences.startShizukuOnBoot(context)) }
+    var requiredByAutoRoot by remember {
+        mutableStateOf(AppPreferences.shizukuBootRequiredByAutoRoot(context))
+    }
     var authToken by remember { mutableStateOf(AppPreferences.shizukuAutomationToken(context)) }
     var diagnostic by remember { mutableStateOf(WirelessAdbDiagnostics.passiveSnapshot(context)) }
     var diagnosticsExpanded by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
     var showForgetDialog by remember { mutableStateOf(false) }
+    val effectiveEnabled = storedEnabled || requiredByAutoRoot
+
+    DisposableEffect(context) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+            storedEnabled = AppPreferences.startShizukuOnBoot(context)
+            requiredByAutoRoot = AppPreferences.shizukuBootRequiredByAutoRoot(context)
+        }
+        AppPreferences.registerPreferenceListener(context, listener)
+        onDispose {
+            AppPreferences.unregisterPreferenceListener(context, listener)
+        }
+    }
 
     if (showForgetDialog) {
         AlertDialog(
@@ -116,9 +133,11 @@ internal fun ShizukuBootSettingsCard() {
                     )
                 }
                 Switch(
-                    checked = enabled,
+                    checked = effectiveEnabled,
+                    enabled = !requiredByAutoRoot,
                     onCheckedChange = { checked ->
-                        enabled = checked
+                        if (requiredByAutoRoot) return@Switch
+                        storedEnabled = checked
                         AppPreferences.setStartShizukuOnBoot(context, checked)
                         if (!checked) {
                             ShizukuBootService.stop(context)
@@ -128,7 +147,15 @@ internal fun ShizukuBootSettingsCard() {
                 )
             }
 
-            AnimatedVisibility(visible = enabled) {
+            AnimatedVisibility(visible = requiredByAutoRoot) {
+                Text(
+                    text = stringResource(R.string.shizuku_boot_required_by_autoroot),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            AnimatedVisibility(visible = effectiveEnabled) {
                 OutlinedTextField(
                     value = authToken,
                     onValueChange = { value ->
