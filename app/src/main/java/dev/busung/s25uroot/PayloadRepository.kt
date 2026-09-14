@@ -60,12 +60,8 @@ class PayloadRepository(private val context: Context) {
         if (profile.source == PayloadSource.Offline) {
             onProgress("Payload source: last-known-good offline cache")
             val payloads = KnownGoodPayloadStore.load(context, profile.profileId)
-            if (isExactZzi4(payloads.profile)) {
-                onProgress("KernelSU staging deferred until ZZI4 bootstrap root")
-            } else {
-                KernelSuBootstrapStore.prepare(context, payloads)
-                onProgress("KernelSU bootstrap source prepared for root-side auto-late-load")
-            }
+            KernelSuBootstrapStore.prepare(context, payloads)
+            onProgress("KernelSU bootstrap source prepared for root-side auto-late-load")
             return payloads
         }
 
@@ -90,12 +86,8 @@ class PayloadRepository(private val context: Context) {
         Os.chmod(exploit.absolutePath, 0b100100100)
         Os.chmod(kernelSu.absolutePath, 0b100100100)
         val payloads = VerifiedPayloads(profile, exploit, kernelSu, PayloadSource.Online)
-        if (isExactZzi4(profile)) {
-            onProgress("KernelSU staging deferred until ZZI4 bootstrap root")
-        } else {
-            KernelSuBootstrapStore.prepare(context, payloads)
-            onProgress("KernelSU bootstrap source prepared for root-side auto-late-load")
-        }
+        KernelSuBootstrapStore.prepare(context, payloads)
+        onProgress("KernelSU bootstrap source prepared for root-side auto-late-load")
         return payloads
     }
 
