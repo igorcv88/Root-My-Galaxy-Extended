@@ -28,5 +28,30 @@ if count != 1:
     raise SystemExit(f"expected receiver import persistence site once, found {count}")
 text = text.replace(needle, replacement, 1)
 
+# re.sub replacement strings interpret backslash escapes. Avoid generated Kotlin
+# assertions that embed \n inside string literals; use simple source-region checks.
+old_manual = '        assertFalse(manual.contains("RootRecoveryActions.restartZygote(\\\\n                                app"))\\n'
+new_manual = '        assertFalse(manual.contains("RootRecoveryActions.restartZygote("))\\n'
+if text.count(old_manual) != 1:
+    raise SystemExit(f"expected generated manual assertion once, found {text.count(old_manual)}")
+text = text.replace(old_manual, new_manual, 1)
+
+old_settings = (
+    '        assertTrue(settings.contains("item {\\\\n            AdvancedRecoverySettings("))\\n'
+    '        assertFalse(settings.contains("if (advancedMode) {\\\\n            item {\\\\n                AdvancedRecoverySettings("))\\n'
+)
+new_settings = (
+    '        val advancedStart = settings.indexOf("item { SectionLabel(stringResource(R.string.advanced)) }")\\n'
+    '        val aboutStart = settings.indexOf("item { SectionLabel(stringResource(R.string.about)) }", advancedStart)\\n'
+    '        assertTrue(advancedStart >= 0)\\n'
+    '        assertTrue(aboutStart > advancedStart)\\n'
+    '        val advancedSection = settings.substring(advancedStart, aboutStart)\\n'
+    '        assertTrue(advancedSection.contains("AdvancedRecoverySettings("))\\n'
+    '        assertFalse(advancedSection.contains("if (advancedMode)"))\\n'
+)
+if text.count(old_settings) != 1:
+    raise SystemExit(f"expected generated settings assertions once, found {text.count(old_settings)}")
+text = text.replace(old_settings, new_settings, 1)
+
 path.write_text(text, encoding="utf-8")
-print("Patched one-shot patcher for current pt-BR strings and receiver imports")
+print("Patched one-shot patcher for current strings, receiver imports, and Kotlin tests")
