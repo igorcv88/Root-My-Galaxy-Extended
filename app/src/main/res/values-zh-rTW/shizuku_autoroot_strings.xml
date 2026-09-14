@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shizuku_boot_required_by_autoroot">此韌體的 Auto Root 需要啟用此項。若要變更此設定，請先關閉 Auto Root。</string>
+</resources>
