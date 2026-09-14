@@ -26,6 +26,9 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
 
+      - name: Normalize one-shot patcher
+        run: python3 tools/fix-zzi4-postroot-patcher.py
+
       - name: Apply patch
         run: python3 tools/apply-zzi4-postroot-notification-fix.py
 
