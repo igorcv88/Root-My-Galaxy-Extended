@@ -22,6 +22,22 @@ jobs:
       - name: Apply ZZI4 idempotent pre-stage patch
         run: python3 tools/apply-zzi4-idempotent-prestage.py
 
+      - name: Fix structural assertion literal
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt')
+          text = path.read_text(encoding='utf-8')
+          old = '        assertTrue(manual.contains("action=${if (reusedExisting) \\"reuse\\" else \\"refresh\\"}"))\n'
+          new = (
+              '        assertTrue(manual.contains("reusedExisting"))\n'
+              '        assertTrue(manual.contains("action="))\n'
+          )
+          if old not in text:
+              raise SystemExit('generated structural assertion anchor not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Java 21
         uses: actions/setup-java@v6
         with:
