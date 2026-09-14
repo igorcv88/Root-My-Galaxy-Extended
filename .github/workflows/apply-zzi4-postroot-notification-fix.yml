@@ -71,3 +71,5 @@ jobs:
             app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt
           git commit -m 'Use user-initiated soft reboot for ZZI4 post-root modules'
           git push
+
+      # Retry marker: generated source-contract assertions were normalized to avoid replacement-string escapes.
