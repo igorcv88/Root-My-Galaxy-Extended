@@ -28,7 +28,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 internal const val AUTO_ROOT_NOTIFICATION_ID = 43499
-internal const val AUTO_ROOT_CHANNEL_ID = "auto_root_postboot"
+internal const val AUTO_ROOT_CHANNEL_ID = "auto_root_wait"
 
 /**
  * Foreground boot gate for Auto Root.
@@ -194,10 +194,40 @@ class AutoRootService : Service() {
                 return
             }
 
-            if (isExactCzg3(DeviceSnapshot.current())) {
-                // Auto Root has its own conservative floor. Do not reuse the
-                // Manual "Diagnostic Launch Time" preference: changing automatic
-                // boot latency must not silently change Manual Standalone behavior.
+            val snapshot = DeviceSnapshot.current()
+            if (AutoRootExecutionService.shouldUseSplitExecution(snapshot)) {
+                // ZZI4: keep the long stabilization wait in the lightweight gate,
+                // then promote a fresh foreground execution service just before
+                // the Manual-equivalent 120 s launch floor. Do not touch the
+                // native payload, FOPS timing, or exploit log publication here.
+                DiagnosticUptime.waitUntil(AutoRootExecutionService.ARM_UPTIME_SECONDS)
+
+                if (!AppPreferences.autoRootEnabled(this)) {
+                    stopWithoutResult()
+                    return
+                }
+
+                val bootToken = AutoRootSupport.currentBootToken()
+                    ?: error(getString(R.string.error_boot_id))
+                require(bootToken == initialBootToken) { getString(R.string.autoroot_boot_changed) }
+
+                if (KernelSuRuntime.isControlActive(this)) {
+                    AutoRootSupport.markVerifiedForBoot(this, bootToken)
+                    stopWithoutResult()
+                    return
+                }
+
+                startForegroundService(
+                    Intent(this, AutoRootExecutionService::class.java)
+                        .putExtra(AutoRootExecutionService.EXTRA_BOOT_TOKEN, bootToken),
+                )
+                // The execution service calls startForeground() before stopping
+                // this gate, so there is no foreground-service gap during handoff.
+                return
+            }
+
+            if (isExactCzg3(snapshot)) {
+                // Preserve the existing CZG3 timing path unchanged.
                 DiagnosticUptime.waitUntil(AppPreferences.autoRootBootMinUptimeSeconds(this))
             } else {
                 delay(LEGACY_STABILIZATION_DELAY_MILLIS)
@@ -388,10 +418,10 @@ class AutoRootService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(
                 AUTO_ROOT_CHANNEL_ID,
-                getString(R.string.autoroot_channel_name),
+                getString(R.string.autoroot_wait_channel_name),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = getString(R.string.autoroot_channel_description)
+                description = getString(R.string.autoroot_wait_channel_description)
             },
         )
     }

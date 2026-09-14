@@ -54,6 +54,14 @@
                 android:value="@string/autoroot_fgs_subtype" />
         </service>
         <service
+            android:name=".AutoRootExecutionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="@string/autoroot_execution_fgs_subtype" />
+        </service>
+        <service
             android:name=".AutoRootExecutorService"
             android:exported="false"
             android:process=":autoroot_exec" />

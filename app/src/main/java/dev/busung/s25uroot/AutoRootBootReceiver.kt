@@ -61,9 +61,13 @@ class AutoRootBootReceiver : BroadcastReceiver() {
 
     private fun stopAutoRootRuntime(context: Context) {
         context.stopService(Intent(context, AutoRootExecutorService::class.java))
+        context.stopService(Intent(context, AutoRootExecutionService::class.java))
         context.stopService(Intent(context, AutoRootService::class.java))
-        context.getSystemService(NotificationManager::class.java)
-            .cancel(AUTO_ROOT_NOTIFICATION_ID)
+        context.getSystemService(NotificationManager::class.java).apply {
+            cancel(AUTO_ROOT_NOTIFICATION_ID)
+            cancel(AutoRootExecutionService.EXECUTION_NOTIFICATION_ID)
+            cancel(AutoRootExecutionService.RESULT_NOTIFICATION_ID)
+        }
     }
 
     companion object {
@@ -77,9 +81,13 @@ class AutoRootActionReceiver : BroadcastReceiver() {
             ACTION_DISABLE_AUTO_ROOT -> {
                 AppPreferences.setAutoRootEnabled(context, false)
                 context.stopService(Intent(context, AutoRootExecutorService::class.java))
+                context.stopService(Intent(context, AutoRootExecutionService::class.java))
                 context.stopService(Intent(context, AutoRootService::class.java))
-                context.getSystemService(NotificationManager::class.java)
-                    .cancel(AUTO_ROOT_NOTIFICATION_ID)
+                context.getSystemService(NotificationManager::class.java).apply {
+                    cancel(AUTO_ROOT_NOTIFICATION_ID)
+                    cancel(AutoRootExecutionService.EXECUTION_NOTIFICATION_ID)
+                    cancel(AutoRootExecutionService.RESULT_NOTIFICATION_ID)
+                }
             }
 
             ACTION_APPLY_MODULES_SOFT_REBOOT -> {

@@ -327,6 +327,13 @@ open class AutoRootExecutorService : Service() {
     }
 
     /** Let the already-running foreground gate own the terminal notification. */
+    private fun resultHostClass(): Class<out Service> =
+        if (AutoRootExecutionService.shouldUseSplitExecution(DeviceSnapshot.current())) {
+            AutoRootExecutionService::class.java
+        } else {
+            AutoRootService::class.java
+        }
+
     private fun finishWithResult(message: String, offerSoftReboot: Boolean = false) {
         val delivered = deliverGateResult(
             message = message,
@@ -342,7 +349,7 @@ open class AutoRootExecutorService : Service() {
                     offerSoftReboot = offerSoftReboot,
                 ),
             )
-            stopService(Intent(this, AutoRootService::class.java))
+            stopService(Intent(this, resultHostClass()))
         }
         stopSelf()
     }
@@ -353,7 +360,7 @@ open class AutoRootExecutorService : Service() {
             if (removeNotification) {
                 getSystemService(NotificationManager::class.java).cancel(AUTO_ROOT_NOTIFICATION_ID)
             }
-            stopService(Intent(this, AutoRootService::class.java))
+            stopService(Intent(this, resultHostClass()))
         }
         stopSelf()
     }
@@ -364,14 +371,14 @@ open class AutoRootExecutorService : Service() {
         offerSoftReboot: Boolean = false,
     ): Boolean = runCatching {
         startService(
-            Intent(this, AutoRootService::class.java)
+            Intent(this, resultHostClass())
                 .setAction(AutoRootService.ACTION_EXECUTOR_RESULT)
                 .putExtra(AutoRootService.EXTRA_RESULT_MESSAGE, message)
                 .putExtra(AutoRootService.EXTRA_REMOVE_NOTIFICATION, removeNotification)
                 .putExtra(AutoRootService.EXTRA_OFFER_SOFT_REBOOT, offerSoftReboot),
         ) != null
     }.onFailure { error ->
-        Log.e(TAG, "Unable to deliver executor result to foreground gate", error)
+        Log.e(TAG, "Unable to deliver executor result to foreground host", error)
     }.getOrDefault(false)
 
     private fun buildNotification(
