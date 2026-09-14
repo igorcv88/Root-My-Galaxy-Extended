@@ -29,6 +29,18 @@ class WirelessAdbDiagnosticsContractTest {
     }
 
     @Test
+    fun staleFlagCannotSilentlyGenerateNewUnpairedKey() {
+        val source = File("src/main/java/dev/busung/s25uroot/WirelessAdbSession.kt").readText()
+        val keyGuard = source.indexOf("AdbCredentialStore.hasStoredKey(context)")
+        val keyManager = source.indexOf("AdbKeyManager(context)")
+
+        assertTrue(keyGuard >= 0)
+        assertTrue(keyManager > keyGuard)
+        assertTrue(source.contains("AppPreferences.setAdbPaired(context, false)"))
+        assertTrue(source.contains("ADB_CREDENTIAL_MISSING"))
+    }
+
+    @Test
     fun diagnosticsUiExposesRecoveryWithoutPrivateKeyMaterial() {
         val ui = File("src/main/java/dev/busung/s25uroot/ShizukuBootSettingsCard.kt").readText()
         val credentials = File("src/main/java/dev/busung/s25uroot/AdbCredentialStore.kt").readText()
