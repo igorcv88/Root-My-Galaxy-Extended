@@ -30,7 +30,9 @@ jobs:
         run: python3 tools/fix-zzi4-postroot-patcher.py
 
       - name: Apply patch
-        run: python3 tools/apply-zzi4-postroot-notification-fix.py
+        run: |
+          python3 tools/apply-zzi4-postroot-notification-fix.py
+          python3 tools/fix-zzi4-generated-resources.py
 
       - name: Verify intended contracts
         run: |
@@ -40,6 +42,7 @@ jobs:
           grep -F 'ACTION_APPLY_MODULES_SOFT_REBOOT' app/src/main/java/dev/busung/s25uroot/AutoRootBootReceiver.kt
           grep -F 'EXTRA_OFFER_SOFT_REBOOT' app/src/main/java/dev/busung/s25uroot/AutoRootService.kt
           grep -F 'softReboot = softRebootAfterRoot' app/src/main/java/dev/busung/s25uroot/InstallViewModel.kt
+          grep -F 'autoroot_apply_modules" tools:ignore="MissingTranslation"' app/src/main/res/values/strings_autoroot.xml
           git diff --check
 
       - name: Test lint assemble
@@ -71,5 +74,3 @@ jobs:
             app/src/test/java/dev/busung/s25uroot/Zzi4PostRootRuntimeTest.kt
           git commit -m 'Use user-initiated soft reboot for ZZI4 post-root modules'
           git push
-
-      # Retry marker: generated source-contract assertions were normalized to avoid replacement-string escapes.
