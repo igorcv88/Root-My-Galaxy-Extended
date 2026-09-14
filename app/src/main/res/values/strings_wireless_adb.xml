@@ -25,4 +25,36 @@
     <string name="postroot_shizuku_failed" translatable="false">Shizuku start failed: %1$s</string>
     <string name="postroot_soft_reboot_started" translatable="false">KernelSU lifecycle applied; restarting zygote</string>
     <string name="postroot_soft_reboot_failed" translatable="false">Soft reboot failed: %1$s</string>
+
+    <string name="wireless_adb_diagnostics_title" translatable="false">Wireless ADB diagnostics</string>
+    <string name="wireless_adb_diagnostics_description" translatable="false">RMG keeps its own ADB identity. A saved key is not considered valid until adbd accepts a real TLS connection.</string>
+    <string name="wireless_adb_pairing_state" translatable="false">Authorization</string>
+    <string name="wireless_adb_key_state" translatable="false">Local key</string>
+    <string name="wireless_adb_key_present" translatable="false">Saved</string>
+    <string name="wireless_adb_key_missing" translatable="false">Missing</string>
+    <string name="wireless_adb_key_fingerprint" translatable="false">Key fingerprint</string>
+    <string name="wireless_adb_debugging_state" translatable="false">Wireless Debugging</string>
+    <string name="wireless_adb_enabled" translatable="false">On</string>
+    <string name="wireless_adb_disabled" translatable="false">Off</string>
+    <string name="wireless_adb_connect_port" translatable="false">Last mDNS port</string>
+    <string name="wireless_adb_status_no_credential" translatable="false">Not paired</string>
+    <string name="wireless_adb_status_saved_unverified" translatable="false">Saved, unverified</string>
+    <string name="wireless_adb_status_valid" translatable="false">Valid</string>
+    <string name="wireless_adb_status_pairing_rejected" translatable="false">Rejected by adbd</string>
+    <string name="wireless_adb_status_mdns_unavailable" translatable="false">mDNS service not found</string>
+    <string name="wireless_adb_status_permission_required" translatable="false">Permission required</string>
+    <string name="wireless_adb_status_connection_failed" translatable="false">Connection failed</string>
+    <string name="wireless_adb_test" translatable="false">Test connection</string>
+    <string name="wireless_adb_testing" translatable="false">Testing…</string>
+    <string name="wireless_adb_refresh" translatable="false">Refresh</string>
+    <string name="wireless_adb_pair_repair" translatable="false">Pair / re-pair</string>
+    <string name="wireless_adb_open_settings" translatable="false">Wireless Debugging settings</string>
+    <string name="wireless_adb_forget" translatable="false">Forget RMG pairing</string>
+    <string name="wireless_adb_forget_title" translatable="false">Forget RMG Wireless ADB pairing?</string>
+    <string name="wireless_adb_forget_body" translatable="false">This deletes RMG’s local ADB key and pairing flag. If an old Root My Galaxy entry remains under Wireless Debugging, remove it there too before pairing again.</string>
+    <string name="wireless_adb_forget_confirm" translatable="false">Forget</string>
+    <string name="wireless_adb_forget_done" translatable="false">RMG local ADB credential deleted.</string>
+    <string name="wireless_adb_forget_failed" translatable="false">The local ADB credential could not be fully deleted.</string>
+    <string name="wireless_adb_test_note" translatable="false">The test temporarily enables Wireless Debugging, discovers the current mDNS port, runs an authenticated local ADB shell command, then turns Wireless Debugging off.</string>
+    <string name="wireless_adb_repair_note" translatable="false">If Android still shows an old Root My Galaxy paired device, forget that device in Wireless Debugging before re-pairing.</string>
 </resources>
