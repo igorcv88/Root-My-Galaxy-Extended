@@ -1,11 +1,18 @@
 package dev.busung.s25uroot
 
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Binder
+import android.os.Bundle
+import android.os.IBinder
+import android.os.Parcel
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -17,6 +24,8 @@ import kotlin.coroutines.resumeWithException
 
 object ShizukuController {
     private const val PERMISSION_REQUEST_CODE = 0x5352
+    private const val REQUEST_BINDER_ACTION = "rikka.shizuku.intent.action.REQUEST_BINDER"
+    private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
     private val FILE_MODE_PATTERN = Regex("[0-7]{3,4}")
 
     fun isRunning(): Boolean = try {
@@ -47,6 +56,75 @@ object ShizukuController {
             }
         }
         return received == true || isRunning()
+    }
+
+    /**
+     * Ask the Shizuku manager to re-deliver its already-existing server Binder to
+     * this exact RMG process. This repairs the Android 17 case where another RMG
+     * process keeps the package UID alive while the default/provider process dies
+     * and is recreated, so UID-based delivery alone does not fire again.
+     *
+     * This operation never starts Shizuku, never enables Wireless ADB, and never
+     * writes to Auto Root history or the exploit log. It only uses the manager's
+     * exported REQUEST_BINDER protocol and republishes the returned Binder into
+     * the Shizuku client API for this process.
+     */
+    suspend fun requestBinderRedelivery(
+        context: Context,
+        timeoutMillis: Long = 1_000L,
+    ): Boolean {
+        if (isRunning()) return true
+
+        val response = CompletableDeferred<IBinder?>()
+        val receiver = object : Binder() {
+            override fun onTransact(
+                code: Int,
+                data: Parcel,
+                reply: Parcel?,
+                flags: Int,
+            ): Boolean {
+                if (code != 1) return super.onTransact(code, data, reply, flags)
+                val binder = runCatching { data.readStrongBinder() }.getOrNull()
+                // The manager also returns its sourceDir for shell-loader users.
+                // RMG already has the Shizuku API on its classpath, so it is not
+                // needed here, but consume the field to match the protocol.
+                runCatching { data.readString() }
+                if (!response.isCompleted) response.complete(binder)
+                return true
+            }
+        }
+
+        val extras = Bundle().apply { putBinder("binder", receiver) }
+        val intent = Intent(REQUEST_BINDER_ACTION)
+            .setPackage(SHIZUKU_PACKAGE)
+            .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+            .putExtra("data", extras)
+
+        val broadcastSent = runCatching {
+            context.sendBroadcast(intent)
+            true
+        }.getOrDefault(false)
+        if (!broadcastSent) return false
+
+        val binder = withTimeoutOrNull(timeoutMillis) { response.await() } ?: return false
+        if (!runCatching { binder.pingBinder() }.getOrDefault(false)) return false
+
+        // onBinderReceived() is public at runtime but annotated RestrictTo in the
+        // Shizuku API. Reflection deliberately avoids turning this recovery path
+        // into a lint RestrictedApi violation while preserving Shizuku's normal
+        // attachApplication/permission initialization semantics.
+        val published = runCatching {
+            val method = Shizuku::class.java.getDeclaredMethod(
+                "onBinderReceived",
+                IBinder::class.java,
+                String::class.java,
+            )
+            method.isAccessible = true
+            method.invoke(null, binder, context.packageName)
+        }.isSuccess
+        if (!published) return false
+
+        return awaitRunning(minOf(timeoutMillis, 750L))
     }
 
     /**

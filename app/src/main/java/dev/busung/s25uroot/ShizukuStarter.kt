@@ -42,7 +42,7 @@ internal object ShizukuStarter {
         binderTimeoutMillis: Long,
         onLog: (String) -> Unit,
     ): Outcome {
-        if (ShizukuController.pingUntilRunning(BINDER_RACE_PROBE_MILLIS)) {
+        if (ensureExistingBinder(context, BINDER_RACE_PROBE_MILLIS)) {
             onLog("[+] Shizuku Binder already available; no starter selected")
             return Outcome(started = true, method = "existing-binder")
         }
@@ -51,7 +51,7 @@ internal object ShizukuStarter {
         if (nativeCommand != null) {
             val nativeProbe = shell("test -f ${shellQuote(nativeCommand.starterPath)}")
             if (nativeProbe.exitCode == 0) {
-                if (ShizukuController.pingUntilRunning(BINDER_RACE_PROBE_MILLIS)) {
+                if (ensureExistingBinder(context, BINDER_RACE_PROBE_MILLIS)) {
                     onLog("[+] Shizuku Binder appeared before native-lib launch; skipped duplicate starter")
                     return Outcome(started = true, method = "existing-binder")
                 }
@@ -59,7 +59,7 @@ internal object ShizukuStarter {
                 onLog("[*] Shizuku startup selected: native-lib")
                 val result = shell("${nativeCommand.command} 2>&1")
                 if (result.exitCode == 0) {
-                    if (ShizukuController.pingUntilRunning(binderTimeoutMillis)) {
+                    if (ensureExistingBinder(context, binderTimeoutMillis)) {
                         onLog("[+] Shizuku started via native-lib; Binder is available")
                         return Outcome(started = true, method = "native-lib")
                     }
@@ -75,14 +75,14 @@ internal object ShizukuStarter {
             onLog("[*] Shizuku native-lib paths are unavailable; checking legacy fallback")
         }
 
-        if (ShizukuController.pingUntilRunning(BINDER_RACE_PROBE_MILLIS)) {
+        if (ensureExistingBinder(context, BINDER_RACE_PROBE_MILLIS)) {
             onLog("[+] Shizuku Binder appeared before legacy fallback; skipped duplicate starter")
             return Outcome(started = true, method = "existing-binder")
         }
 
         val legacyPath = firstLegacyScript(shell)
         if (legacyPath != null) {
-            if (ShizukuController.pingUntilRunning(BINDER_RACE_PROBE_MILLIS)) {
+            if (ensureExistingBinder(context, BINDER_RACE_PROBE_MILLIS)) {
                 onLog("[+] Shizuku Binder appeared before legacy start.sh launch; skipped duplicate starter")
                 return Outcome(started = true, method = "existing-binder")
             }
@@ -90,7 +90,7 @@ internal object ShizukuStarter {
             onLog("[*] Shizuku startup selected: legacy-start.sh")
             val result = shell("sh ${shellQuote(legacyPath)} 2>&1")
             if (result.exitCode == 0) {
-                if (ShizukuController.pingUntilRunning(binderTimeoutMillis)) {
+                if (ensureExistingBinder(context, binderTimeoutMillis)) {
                     onLog("[+] Shizuku started via legacy-start.sh; Binder is available")
                     return Outcome(started = true, method = "legacy-start.sh")
                 }
@@ -110,6 +110,24 @@ internal object ShizukuStarter {
         val detail = "no compatible Shizuku shell starter produced a Binder"
         onLog("[!] $detail (legacy start.sh not present; skipped)")
         return Outcome(started = false, detail = detail)
+    }
+
+    /**
+     * Prefer an existing server over launching another one. On Android 17 the
+     * default RMG process can be recreated while :autoroot_gate keeps the UID
+     * alive, preventing the normal UID-start path from re-delivering Shizuku's
+     * Binder. A direct REQUEST_BINDER is much cheaper and safer than restarting
+     * the server or opening Wireless ADB.
+     */
+    private suspend fun ensureExistingBinder(
+        context: Context,
+        passiveProbeMillis: Long,
+    ): Boolean {
+        if (ShizukuController.pingUntilRunning(passiveProbeMillis)) return true
+        return ShizukuController.requestBinderRedelivery(
+            context = context,
+            timeoutMillis = BINDER_REDELIVERY_TIMEOUT_MILLIS,
+        )
     }
 
     private fun nativeCommand(context: Context): NativeCommand? {
@@ -144,6 +162,7 @@ internal object ShizukuStarter {
 
     private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
     private const val BINDER_RACE_PROBE_MILLIS = 500L
+    private const val BINDER_REDELIVERY_TIMEOUT_MILLIS = 750L
     private val LEGACY_START_PATHS = arrayOf(
         "/storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh",
         "/sdcard/Android/data/moe.shizuku.privileged.api/start.sh",
