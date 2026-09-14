@@ -433,11 +433,10 @@ internal class AutoRootRunner(
     }
 
     private fun zzi4KernelSuVerifyCommand(): String =
-    "set -e; " +
-        "h=$(/system/bin/toybox sha256sum ${shellQuote(KSUD_PATH)} | " +
-        "/system/bin/toybox awk '{print \$1}'); " +
-        "s=$(/system/bin/toybox wc -c < ${shellQuote(KSUD_PATH)}); " +
-        "printf '%s %s\\n' \"\$h\" \"\$s\""
+"set -e; " +
+    "/system/bin/toybox sha256sum ${shellQuote(KSUD_PATH)} | " +
+    "/system/bin/toybox cut -d ' ' -f 1; " +
+    "/system/bin/toybox wc -c < ${shellQuote(KSUD_PATH)}"
 
     private fun verifyZzi4KernelSuPreStage(
         payloads: VerifiedPayloads,
