@@ -217,14 +217,14 @@ class PayloadRepository(private val context: Context) {
             connectTimeout = 15_000
             readTimeout = 60_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "S25URoot/${BuildConfig.VERSION_NAME}")
+            setRequestProperty("User-Agent", "RootMyGalaxy/${BuildConfig.VERSION_NAME}")
             connect()
             require(responseCode == HttpURLConnection.HTTP_OK) { "HTTP $responseCode" }
         }
 
     companion object {
         private const val OFFLINE_REQUEST_PREFIX = "offline-cache:"
-        private const val PAYLOAD_REPOSITORY = "igorcv88/Root-My-Galaxy-Payloads-S938B"
+        private const val PAYLOAD_REPOSITORY = "igorcv88/Root-My-Galaxy-Payloads-Extended"
         private const val COMMIT_API_URL =
             "https://api.github.com/repos/$PAYLOAD_REPOSITORY/git/ref/heads/main"
         private const val RAW_REPOSITORY =
