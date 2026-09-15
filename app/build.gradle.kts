@@ -9,7 +9,7 @@ val releaseVersionCode = providers.gradleProperty("releaseVersionCode")
     ?: 13
 val releaseVersionName = providers.gradleProperty("releaseVersionName")
     .orNull
-    ?: "0.2.65-s938b"
+    ?: "0.3-dev"
 
 android {
     namespace = "dev.busung.s25uroot"
@@ -59,10 +59,10 @@ android {
 
     packaging {
         jniLibs.useLegacyPackaging = true
-        // The v0266 feed binds execution to the exact root-helper artifact hash.
-        // AGP normally strips packaged JNI ELF files in release builds, which
-        // changes this helper's bytes after the workflow has verified them.
-        // Keep this one artifact byte-for-byte identical to the published feed.
+        // Exact payload profiles can bind execution to the bundled root-helper hash.
+        // AGP normally strips packaged JNI ELF files in release builds, which changes
+        // the helper bytes after the workflow has verified them. Keep it byte-identical
+        // to the production payload feed.
         jniLibs.keepDebugSymbols += "**/libcve43499root.so"
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
