@@ -33,8 +33,9 @@ Root My Galaxy Extended is based on [BuSung-dev/Root-My-Galaxy](https://github.c
 | Galaxy S25 Ultra SM-S938B | `S938BXXSBCZG3` | 16 | 6.6.98 | Supported |
 | Galaxy S25 Ultra SM-S938B | `S938BXXUCZZI4` | 17 / One UI 9 beta | 6.6.127 | Supported and hardware validated |
 | Galaxy S25 SM-S931B | `S931BXXUCZZI4` | 17 / One UI 9 beta | 6.6.127 | Exact-match profile available |
+| Galaxy S25+ SM-S936B | compatible 6.6.98 builds | 16 | 6.6.98 | Advanced support (unvalidated) |
 
-Profiles are matched against the device, build and kernel identity. Check the companion [payload repository](https://github.com/igorcv88/Root-My-Galaxy-Payloads-Extended) for the current feed and exact matching data.
+Exact profiles are matched against the complete device, build and kernel identity. The S936B entry is available through the manual/Advanced catalog while its exact profiles are still being collected. Check the companion [payload repository](https://github.com/igorcv88/Root-My-Galaxy-Payloads-Extended) for the current feed and matching data.
 
 ## Root modes
 
@@ -73,7 +74,7 @@ Manual and automatic runs are stored in History with their result and logs. Indi
 
 ## Payloads and integrity
 
-Firmware profiles and binaries are maintained in [Root-My-Galaxy-Payloads-Extended](https://github.com/igorcv88/Root-My-Galaxy-Payloads-Extended). The app verifies artifact metadata before use and keeps its offline cache tied to the complete target profile.
+Firmware profiles and binaries are maintained in [Root-My-Galaxy-Payloads-Extended](https://github.com/igorcv88/Root-My-Galaxy-Payloads-Extended). The app resolves the feed from a specific payload commit, pins every artifact to that same commit, verifies its metadata, and keeps its offline cache tied to the complete target profile.
 
 ## Building
 
