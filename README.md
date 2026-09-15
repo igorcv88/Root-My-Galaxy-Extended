@@ -7,7 +7,6 @@
   <a href="https://github.com/igorcv88/Root-My-Galaxy-Extended/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/igorcv88/Root-My-Galaxy-Extended/total" /></a>
   <img alt="Android" src="https://img.shields.io/badge/Android-16%20%2F%2017-3DDC84?logo=android&amp;logoColor=white" />
   <img alt="KernelSU" src="https://img.shields.io/badge/KernelSU-3.3.0-2f81f7" />
-  <a href="https://github.com/igorcv88/Root-My-Galaxy-Extended/actions/workflows/release.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/igorcv88/Root-My-Galaxy-Extended/release.yml?branch=main&amp;label=build" /></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/igorcv88/Root-My-Galaxy-Extended" /></a>
 </p>
 
@@ -75,12 +74,6 @@ Manual and automatic runs are stored in History with their result and logs. Indi
 ## Payloads and integrity
 
 Firmware profiles and binaries are maintained in [Root-My-Galaxy-Payloads-Extended](https://github.com/igorcv88/Root-My-Galaxy-Payloads-Extended). The app resolves the feed from a specific payload commit, pins every artifact to that same commit, verifies its metadata, and keeps its offline cache tied to the complete target profile.
-
-## Building
-
-The release workflow runs tests, Android lint and release assembly, verifies the bundled root helper against the pinned payload feed, signs the APK and publishes release artifacts.
-
-Technical notes for contributors are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Credits
 
