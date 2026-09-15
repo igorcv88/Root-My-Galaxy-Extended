@@ -4,12 +4,6 @@
     <string name="autoroot_opt_in_description">Restore KernelSU automatically after a full reboot. Auto Root runs at most once per boot, requires the exact supported firmware, verifies cached payload SHA-256, and uses Shizuku only when it is already available and authorized.</string>
     <string name="autoroot_channel_name">Automatic root restore</string>
     <string name="autoroot_channel_description">Progress and results while Root My Galaxy restores KernelSU after boot.</string>
-    <string name="autoroot_wait_channel_name" tools:ignore="MissingTranslation">Auto Root — waiting</string>
-    <string name="autoroot_wait_channel_description" tools:ignore="MissingTranslation">Silent stabilization wait before automatic root execution.</string>
-    <string name="autoroot_execution_channel_name" tools:ignore="MissingTranslation">Auto Root — execution</string>
-    <string name="autoroot_execution_channel_description" tools:ignore="MissingTranslation">Foreground preparation and exploit execution.</string>
-    <string name="autoroot_result_channel_name" tools:ignore="MissingTranslation">Auto Root — results</string>
-    <string name="autoroot_result_channel_description" tools:ignore="MissingTranslation">Completion and failure notifications for automatic root.</string>
     <string name="autoroot_notification_title">Root My Galaxy</string>
     <string name="autoroot_waiting_android">Waiting for Android…</string>
     <string name="autoroot_stabilizing_android">Android is ready. Waiting for system stabilization…</string>
@@ -19,8 +13,8 @@
     <string name="autoroot_loading_ksu">Loading KernelSU…</string>
     <string name="autoroot_verifying_root">Verifying KernelSU control channel…</string>
     <string name="autoroot_root_restored">Root restored</string>
-    <string name="autoroot_root_restored_modules_pending" tools:ignore="MissingTranslation">Root restored</string>
-    <string name="autoroot_apply_modules" tools:ignore="MissingTranslation">Apply Modules (Soft Reboot)</string>
+    <string name="autoroot_root_restored_modules_pending" tools:ignore="MissingTranslation">Root restored. Soft reboot is available when you want to apply Zygisk/LSPosed modules.</string>
+    <string name="autoroot_apply_modules" tools:ignore="MissingTranslation">Apply modules</string>
     <string name="autoroot_failed">Auto Root failed: %1$s</string>
     <string name="autoroot_disable">Disable Auto Root</string>
     <string name="autoroot_profile_invalid">The embedded Auto Root profile is invalid.</string>
@@ -32,7 +26,6 @@
     <string name="autoroot_already_attempted">Auto Root has already attempted this boot. No automatic retry will be performed.</string>
     <string name="autoroot_notification_permission">Auto Root remains enabled, but progress notifications may be hidden until notification permission is granted.</string>
     <string name="autoroot_fgs_subtype" translatable="false">User-enabled automatic post-boot KernelSU restoration using a locally cached, cryptographically verified payload for an exact supported device firmware.</string>
-    <string name="autoroot_execution_fgs_subtype" translatable="false">Fresh foreground execution phase for the user-enabled automatic KernelSU restoration after the stabilization gate.</string>
     <string name="autoroot_not_ready_title">Auto Root armed</string>
     <string name="autoroot_not_ready_body">Auto Root is enabled, but it will not run until Manual Online completes successfully once and stores a verified payload cache.</string>
     <string name="autoroot_not_ready_acknowledge" translatable="false">OK</string>

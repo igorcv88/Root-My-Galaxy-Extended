@@ -15,7 +15,6 @@ import android.os.IBinder
 import android.os.Message
 import android.os.Messenger
 import android.os.PowerManager
-import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.util.UUID
@@ -29,16 +28,16 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 internal const val AUTO_ROOT_NOTIFICATION_ID = 43499
-internal const val AUTO_ROOT_CHANNEL_ID = "auto_root_wait"
+internal const val AUTO_ROOT_CHANNEL_ID = "auto_root_postboot"
 
 /**
  * Foreground boot gate for Auto Root.
  *
  * BOOT_COMPLETED is the Android-readiness signal. The gate owns the foreground
- * lifecycle and stabilization wait. Standalone targets still execute through a
- * fresh :autoroot_exec process. ZZI4 receives one absolute elapsedRealtime launch
- * target computed by the BOOT_COMPLETED receiver, then promotes the fresh
- * execution phase only ARM_LEAD_MILLIS before that target.
+ * lifecycle and minimum-uptime wait. Standalone targets still execute through a
+ * fresh :autoroot_exec process. Targets that require shell are dispatched to the
+ * default/provider process so they use the authoritative Shizuku Binder there;
+ * the exploit itself still runs remotely with shell identity.
  */
 class AutoRootService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -124,11 +123,6 @@ class AutoRootService : Service() {
 
         if (runJob?.isActive == true || executorBound) return START_NOT_STICKY
 
-        val launchTargetElapsedRealtime = intent?.getLongExtra(
-            EXTRA_LAUNCH_TARGET_ELAPSED_REALTIME,
-            -1L,
-        ) ?: -1L
-
         val initial = buildNotification(getString(R.string.autoroot_stabilizing_android), ongoing = true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
@@ -140,7 +134,7 @@ class AutoRootService : Service() {
             startForeground(AUTO_ROOT_NOTIFICATION_ID, initial)
         }
 
-        runJob = scope.launch { runGate(launchTargetElapsedRealtime) }
+        runJob = scope.launch { runGate() }
         return START_NOT_STICKY
     }
 
@@ -162,7 +156,7 @@ class AutoRootService : Service() {
         super.onDestroy()
     }
 
-    private suspend fun runGate(launchTargetElapsedRealtime: Long) {
+    private suspend fun runGate() {
         val initialBootToken = AutoRootSupport.currentBootToken()
         if (initialBootToken == null || !AutoRootSupport.shouldRunForBoot(this, initialBootToken)) {
             Log.i(TAG, "Auto Root skipped: kernel boot id is unchanged (soft/userspace reboot) or unverifiable")
@@ -187,7 +181,7 @@ class AutoRootService : Service() {
             val shellTransportRequired = AutoRootSupport.requiresShellTransport(this)
             if (shellTransportRequired) {
                 // On ZZI4 the exploit route needs u:r:shell:s0 for tracefs. Start
-                // Shizuku before the time gate instead of letting the two boot
+                // Shizuku before the uptime gate instead of letting the two boot
                 // automations race each other.
                 ShizukuBootService.startForAutoRoot(this)
                 Log.i(TAG, "Auto Root target requires shell transport; prioritizing Shizuku bootstrap")
@@ -200,54 +194,10 @@ class AutoRootService : Service() {
                 return
             }
 
-            val snapshot = DeviceSnapshot.current()
-            if (AutoRootExecutionService.shouldUseSplitExecution(snapshot)) {
-                // The receiver already computed the hybrid target from two clocks:
-                // a 120 s minimum kernel uptime and a 75 s post-BOOT_COMPLETED
-                // guard. Keep the sensitive execution phase fresh by promoting it
-                // only two seconds before that absolute monotonic target.
-                val effectiveLaunchTarget =
-                    if (launchTargetElapsedRealtime > 0L) {
-                        launchTargetElapsedRealtime
-                    } else {
-                        AutoRootExecutionService.MIN_LAUNCH_UPTIME_MILLIS
-                    }
-                val armTarget = maxOf(
-                    0L,
-                    effectiveLaunchTarget - AutoRootExecutionService.ARM_LEAD_MILLIS,
-                )
-                waitUntilElapsedRealtime(armTarget)
-
-                if (!AppPreferences.autoRootEnabled(this)) {
-                    stopWithoutResult()
-                    return
-                }
-
-                val bootToken = AutoRootSupport.currentBootToken()
-                    ?: error(getString(R.string.error_boot_id))
-                require(bootToken == initialBootToken) { getString(R.string.autoroot_boot_changed) }
-
-                if (KernelSuRuntime.isControlActive(this)) {
-                    AutoRootSupport.markVerifiedForBoot(this, bootToken)
-                    stopWithoutResult()
-                    return
-                }
-
-                startForegroundService(
-                    Intent(this, AutoRootExecutionService::class.java)
-                        .putExtra(AutoRootExecutionService.EXTRA_BOOT_TOKEN, bootToken)
-                        .putExtra(
-                            AutoRootExecutionService.EXTRA_LAUNCH_TARGET_ELAPSED_REALTIME,
-                            effectiveLaunchTarget,
-                        ),
-                )
-                // The execution service calls startForeground() before stopping
-                // this gate, so there is no foreground-service gap during handoff.
-                return
-            }
-
-            if (isExactCzg3(snapshot)) {
-                // Preserve the existing CZG3 timing path unchanged.
+            if (isExactCzg3(DeviceSnapshot.current())) {
+                // Auto Root has its own conservative floor. Do not reuse the
+                // Manual "Diagnostic Launch Time" preference: changing automatic
+                // boot latency must not silently change Manual Standalone behavior.
                 DiagnosticUptime.waitUntil(AppPreferences.autoRootBootMinUptimeSeconds(this))
             } else {
                 delay(LEGACY_STABILIZATION_DELAY_MILLIS)
@@ -312,14 +262,6 @@ class AutoRootService : Service() {
             finishWithResult(getString(R.string.autoroot_failed, detail))
         } finally {
             if (wakeLock.isHeld) wakeLock.release()
-        }
-    }
-
-    private suspend fun waitUntilElapsedRealtime(targetMillis: Long) {
-        while (true) {
-            val remaining = targetMillis - SystemClock.elapsedRealtime()
-            if (remaining <= 0L) return
-            delay(minOf(remaining, 1_000L))
         }
     }
 
@@ -446,10 +388,10 @@ class AutoRootService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(
                 AUTO_ROOT_CHANNEL_ID,
-                getString(R.string.autoroot_wait_channel_name),
+                getString(R.string.autoroot_channel_name),
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = getString(R.string.autoroot_wait_channel_description)
+                description = getString(R.string.autoroot_channel_description)
             },
         )
     }
@@ -459,8 +401,6 @@ class AutoRootService : Service() {
         const val EXTRA_RESULT_MESSAGE = "executor_result_message"
         const val EXTRA_REMOVE_NOTIFICATION = "executor_remove_notification"
         const val EXTRA_OFFER_SOFT_REBOOT = "executor_offer_soft_reboot"
-        const val EXTRA_LAUNCH_TARGET_ELAPSED_REALTIME =
-            "dev.busung.s25uroot.extra.AUTO_ROOT_GATE_LAUNCH_TARGET_ELAPSED_REALTIME"
 
         private const val TAG = "RootMyGalaxyAutoRootGate"
         private const val LEGACY_STABILIZATION_DELAY_MILLIS = 45_000L

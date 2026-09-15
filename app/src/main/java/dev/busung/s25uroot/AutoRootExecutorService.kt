@@ -45,9 +45,6 @@ open class AutoRootExecutorService : Service() {
         }.asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private var runJob: Job? = null
-    private val splitExecution: Boolean by lazy(LazyThreadSafetyMode.NONE) {
-        AutoRootExecutionService.shouldUseSplitExecution(DeviceSnapshot.current())
-    }
 
     private val commandHandler = Handler(Looper.getMainLooper()) { message ->
         when (message.what) {
@@ -322,30 +319,14 @@ open class AutoRootExecutorService : Service() {
         }
     }
 
-    private fun isSplitExecution(): Boolean = splitExecution
-
     private fun updateNotification(message: String) {
-        if (isSplitExecution()) {
-            // The split foreground host owns one progress notification (43500).
-            // Reuse that same ID/channel for every stage instead of creating a
-            // second legacy 43499 notification beside it.
-            AutoRootExecutionService.postProgressNotification(this, message)
-        } else {
-            getSystemService(NotificationManager::class.java).notify(
-                AUTO_ROOT_NOTIFICATION_ID,
-                buildNotification(message, ongoing = true),
-            )
-        }
+        getSystemService(NotificationManager::class.java).notify(
+            AUTO_ROOT_NOTIFICATION_ID,
+            buildNotification(message, ongoing = true),
+        )
     }
 
     /** Let the already-running foreground gate own the terminal notification. */
-    private fun resultHostClass(): Class<out Service> =
-        if (isSplitExecution()) {
-            AutoRootExecutionService::class.java
-        } else {
-            AutoRootService::class.java
-        }
-
     private fun finishWithResult(message: String, offerSoftReboot: Boolean = false) {
         val delivered = deliverGateResult(
             message = message,
@@ -353,23 +334,15 @@ open class AutoRootExecutorService : Service() {
             offerSoftReboot = offerSoftReboot,
         )
         if (!delivered) {
-            if (isSplitExecution()) {
-                AutoRootExecutionService.postResultNotification(
-                    this,
-                    message,
-                    offerSoftReboot,
-                )
-            } else {
-                getSystemService(NotificationManager::class.java).notify(
-                    AUTO_ROOT_NOTIFICATION_ID,
-                    buildNotification(
-                        message = message,
-                        ongoing = false,
-                        offerSoftReboot = offerSoftReboot,
-                    ),
-                )
-            }
-            stopService(Intent(this, resultHostClass()))
+            getSystemService(NotificationManager::class.java).notify(
+                AUTO_ROOT_NOTIFICATION_ID,
+                buildNotification(
+                    message = message,
+                    ongoing = false,
+                    offerSoftReboot = offerSoftReboot,
+                ),
+            )
+            stopService(Intent(this, AutoRootService::class.java))
         }
         stopSelf()
     }
@@ -378,14 +351,9 @@ open class AutoRootExecutorService : Service() {
         val delivered = deliverGateResult(message = null, removeNotification = removeNotification)
         if (!delivered) {
             if (removeNotification) {
-                getSystemService(NotificationManager::class.java).apply {
-                    cancel(AUTO_ROOT_NOTIFICATION_ID)
-                    if (isSplitExecution()) {
-                        cancel(AutoRootExecutionService.EXECUTION_NOTIFICATION_ID)
-                    }
-                }
+                getSystemService(NotificationManager::class.java).cancel(AUTO_ROOT_NOTIFICATION_ID)
             }
-            stopService(Intent(this, resultHostClass()))
+            stopService(Intent(this, AutoRootService::class.java))
         }
         stopSelf()
     }
@@ -396,14 +364,14 @@ open class AutoRootExecutorService : Service() {
         offerSoftReboot: Boolean = false,
     ): Boolean = runCatching {
         startService(
-            Intent(this, resultHostClass())
+            Intent(this, AutoRootService::class.java)
                 .setAction(AutoRootService.ACTION_EXECUTOR_RESULT)
                 .putExtra(AutoRootService.EXTRA_RESULT_MESSAGE, message)
                 .putExtra(AutoRootService.EXTRA_REMOVE_NOTIFICATION, removeNotification)
                 .putExtra(AutoRootService.EXTRA_OFFER_SOFT_REBOOT, offerSoftReboot),
         ) != null
     }.onFailure { error ->
-        Log.e(TAG, "Unable to deliver executor result to foreground host", error)
+        Log.e(TAG, "Unable to deliver executor result to foreground gate", error)
     }.getOrDefault(false)
 
     private fun buildNotification(

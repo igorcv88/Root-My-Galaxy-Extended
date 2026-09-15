@@ -4,7 +4,6 @@ import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,7 +13,6 @@ import kotlinx.coroutines.launch
 class AutoRootBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
-        val bootCompletedElapsedRealtime = SystemClock.elapsedRealtime()
 
         // Shizuku is a boot utility, not part of root acquisition. Start its
         // coordinator immediately on every framework BOOT_COMPLETED. After a
@@ -58,35 +56,14 @@ class AutoRootBootReceiver : BroadcastReceiver() {
             return
         }
 
-        val autoRootIntent = Intent(context, AutoRootService::class.java)
-        val snapshot = DeviceSnapshot.current()
-        if (AutoRootExecutionService.shouldUseSplitExecution(snapshot)) {
-            // Compute the hybrid monotonic target from the timestamp captured at
-            // receiver entry. Services downstream receive this absolute target;
-            // they never recalculate "now + guard", so receiver/service latency
-            // cannot become another timing variable.
-            val launchTargetElapsedRealtime =
-                AutoRootExecutionService.computeLaunchTargetElapsedRealtime(
-                    bootCompletedElapsedRealtime,
-                )
-            autoRootIntent.putExtra(
-                AutoRootService.EXTRA_LAUNCH_TARGET_ELAPSED_REALTIME,
-                launchTargetElapsedRealtime,
-            )
-        }
-
-        context.startForegroundService(autoRootIntent)
+        context.startForegroundService(Intent(context, AutoRootService::class.java))
     }
 
     private fun stopAutoRootRuntime(context: Context) {
         context.stopService(Intent(context, AutoRootExecutorService::class.java))
-        context.stopService(Intent(context, AutoRootExecutionService::class.java))
         context.stopService(Intent(context, AutoRootService::class.java))
-        context.getSystemService(NotificationManager::class.java).apply {
-            cancel(AUTO_ROOT_NOTIFICATION_ID)
-            cancel(AutoRootExecutionService.EXECUTION_NOTIFICATION_ID)
-            cancel(AutoRootExecutionService.RESULT_NOTIFICATION_ID)
-        }
+        context.getSystemService(NotificationManager::class.java)
+            .cancel(AUTO_ROOT_NOTIFICATION_ID)
     }
 
     companion object {
@@ -100,13 +77,9 @@ class AutoRootActionReceiver : BroadcastReceiver() {
             ACTION_DISABLE_AUTO_ROOT -> {
                 AppPreferences.setAutoRootEnabled(context, false)
                 context.stopService(Intent(context, AutoRootExecutorService::class.java))
-                context.stopService(Intent(context, AutoRootExecutionService::class.java))
                 context.stopService(Intent(context, AutoRootService::class.java))
-                context.getSystemService(NotificationManager::class.java).apply {
-                    cancel(AUTO_ROOT_NOTIFICATION_ID)
-                    cancel(AutoRootExecutionService.EXECUTION_NOTIFICATION_ID)
-                    cancel(AutoRootExecutionService.RESULT_NOTIFICATION_ID)
-                }
+                context.getSystemService(NotificationManager::class.java)
+                    .cancel(AUTO_ROOT_NOTIFICATION_ID)
             }
 
             ACTION_APPLY_MODULES_SOFT_REBOOT -> {
@@ -117,11 +90,8 @@ class AutoRootActionReceiver : BroadcastReceiver() {
                             context.applicationContext,
                         )
                         if (result.accepted) {
-                            context.getSystemService(NotificationManager::class.java).apply {
-                                cancel(AUTO_ROOT_NOTIFICATION_ID)
-                                cancel(AutoRootExecutionService.EXECUTION_NOTIFICATION_ID)
-                                cancel(AutoRootExecutionService.RESULT_NOTIFICATION_ID)
-                            }
+                            context.getSystemService(NotificationManager::class.java)
+                                .cancel(AUTO_ROOT_NOTIFICATION_ID)
                             Log.i(TAG, "User accepted KernelSU soft reboot from Auto Root notification")
                         } else {
                             Log.w(TAG, "Soft reboot notification action failed: ${result.detail}")
