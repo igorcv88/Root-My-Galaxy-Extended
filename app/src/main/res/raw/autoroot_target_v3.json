@@ -20,14 +20,137 @@
         "pageSize": 4096
       },
       "exploit": {
-        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-S938B/main/artifacts/pa3q-S938BXXSBCZG3-v0265/cve-2026-43499-app.so",
+        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/artifacts/pa3q-S938BXXSBCZG3-v0266/cve-2026-43499-app.so",
         "size": 104128,
         "sha256": "1719e9362cd19e58521cb785fcaa40c4613ca854d0c3c9fb8320edf8e9046303"
       },
       "kernelsu": {
-        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-S938B/main/kernelsu/ksud-s25u-kdp-v3.3.0",
-        "size": 5096104,
-        "sha256": "5a009f1fc58b25a6e197d8ec951a86ec11a9b5ec9d56bdb5f7a3410a22b9b48a"
+        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/kernelsu/ksud-s25u-kdp-v3.3.0",
+        "size": 5101328,
+        "sha256": "9c07ab0f9922cef5a8ef0c7805967d1019bf9e084553bc994e7a42c9347bdab1"
+      },
+      "rootHelper": {
+        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/artifacts/pa3q-S938BXXSBCZG3-v0266/cve-2026-43499-root",
+        "size": 31496,
+        "sha256": "788611baf566f0ca9008d28fa7d1b1edb4657efc56e4b5ac24b319ae12519dd4"
+      },
+      "routePolicy": {
+        "slideRoute": "default",
+        "attempts": 24,
+        "attemptTimeoutSec": 120,
+        "p0AttemptTimeoutSec": 45,
+        "p0OffsetCache": true,
+        "prefersShellTransport": false
+      }
+    },
+    {
+      "payloadId": "pa3q-S938BXXUCZZI4",
+      "displayName": "Galaxy S25 Ultra SM-S938B | S938BXXUCZZI4",
+      "models": ["SM-S938B"],
+      "kernelVersions": ["6.6.127"],
+      "exactMatch": {
+        "manufacturer": "samsung",
+        "model": "SM-S938B",
+        "device": "pa3q",
+        "buildDisplay": "CP2A.260605.016.S938BXXUCZZI4",
+        "buildFingerprint": "samsung/pa3qxxx/pa3q:17/CP2A.260605.016/S938BXXUCZZI4_OXMCZZI4:user/release-keys",
+        "kernelRelease": "6.6.127-android15-8-p33f4ffe-abogkiS938BXXUCZZI4-4k",
+        "kernelVersionInfo": "#1 SMP PREEMPT Wed Sep  2 08:13:43 UTC 2026",
+        "machine": "aarch64",
+        "sdk": 37,
+        "abi": "arm64-v8a",
+        "pageSize": 4096
+      },
+      "exploit": {
+        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/artifacts/pa3q-S938BXXUCZZI4-v0300/cve-2026-43499-app.so",
+        "size": 104128,
+        "sha256": "14143d6c5385e4c46bd34dc335772e9d1bcae7f5c102e34a6b142b875395df2b"
+      },
+      "kernelsu": {
+        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/kernelsu/ksud-pa3q-S938BXXUCZZI4-kdp-v3.3.0",
+        "size": 6664656,
+        "sha256": "d76b44c984b8d6f7121f712d8aa4e7cf0178ff36a8cd531bddaca9dd2fd361e2"
+      },
+      "rootHelper": {
+        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/artifacts/pa3q-S938BXXUCZZI4-v0300/cve-2026-43499-root",
+        "size": 31496,
+        "sha256": "788611baf566f0ca9008d28fa7d1b1edb4657efc56e4b5ac24b319ae12519dd4"
+      },
+      "routePolicy": {
+        "slideRoute": "auto",
+        "attempts": 24,
+        "attemptTimeoutSec": 120,
+        "p0AttemptTimeoutSec": 45,
+        "p0OffsetCache": true,
+        "prefersShellTransport": true
+      }
+    },
+    {
+      "payloadId": "pa1q-S931BXXUCZZI4",
+      "displayName": "Galaxy S25 SM-S931B | S931BXXUCZZI4",
+      "models": ["SM-S931B"],
+      "kernelVersions": ["6.6.127"],
+      "exactMatch": {
+        "manufacturer": "samsung",
+        "model": "SM-S931B",
+        "device": "pa1q",
+        "buildDisplay": "CP2A.260605.016.S931BXXUCZZI4",
+        "buildFingerprint": "samsung/pa1qxeea/pa1q:17/CP2A.260605.016/S931BXXUCZZI4_OXMCZZI4:user/release-keys",
+        "kernelRelease": "6.6.127-android15-8-p33f4ffe-abogkiS931BXXUCZZI4-4k",
+        "kernelVersionInfo": "#1 SMP PREEMPT Wed Sep  2 08:11:10 UTC 2026",
+        "machine": "aarch64",
+        "sdk": 37,
+        "abi": "arm64-v8a",
+        "pageSize": 4096
+      },
+      "exploit": {
+        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/artifacts/pa1q-S931BXXUCZZI4/cve-2026-43499-app.so",
+        "size": 104128,
+        "sha256": "2f9799912ec6c297d9190bc2b82ff417ff451854a08e9524fa549743470284af"
+      },
+      "kernelsu": {
+        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/kernelsu/ksud-pa1q-S931BXXUCZZI4-kdp",
+        "size": 6419120,
+        "sha256": "1e1cb6b861d0d4951b7374c12404eee1fb4c02a77240e0500ca571a302396374",
+        "kmi": "android15-6.6"
+      },
+      "rootHelper": {
+        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/artifacts/pa3q-S938BXXUCZZI4-v0300/cve-2026-43499-root",
+        "size": 31496,
+        "sha256": "788611baf566f0ca9008d28fa7d1b1edb4657efc56e4b5ac24b319ae12519dd4"
+      },
+      "routePolicy": {
+        "slideRoute": "default",
+        "attempts": 24,
+        "attemptTimeoutSec": 120,
+        "p0AttemptTimeoutSec": 45,
+        "p0OffsetCache": true,
+        "prefersShellTransport": true
+      }
+    },
+    {
+      "payloadId": "galaxy-s25-series-2026-06-07",
+      "displayName": "Galaxy S25 / S25+ SM-S931B, SM-S936B | Kernel 6.6.98",
+      "models": ["SM-S931B", "SM-S936B"],
+      "kernelVersions": ["6.6.98"],
+      "exploit": {
+        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/artifacts/pa3q-S938NKSUACZF1/cve-2026-43499-app.so",
+        "size": 104128,
+        "sha256": "6311e5ae1a381fd96b8a989e82525521ed9b00cff4e0d3020d3904eb5716587c"
+      },
+      "kernelsu": {
+        "url": "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/kernelsu/ksud-s25u-kdp",
+        "size": 6407096,
+        "sha256": "fa3edcc7d168637394877b30cb1f909d762dda788ec14051f4ae79edd6562d63",
+        "kmi": "android15-6.6"
+      },
+      "routePolicy": {
+        "slideRoute": "default",
+        "attempts": 24,
+        "attemptTimeoutSec": 120,
+        "p0AttemptTimeoutSec": 45,
+        "p0OffsetCache": true,
+        "prefersShellTransport": false
       }
     }
   ]
