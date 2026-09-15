@@ -12,7 +12,7 @@ concurrency:
 
 env:
   RELEASE_SERIES: "0.3"
-  PAYLOAD_REPO: "igorcv88/Root-My-Galaxy-Payloads-S938B"
+  PAYLOAD_REPO: "igorcv88/Root-My-Galaxy-Payloads-Extended"
 
 jobs:
   release:
@@ -64,14 +64,10 @@ jobs:
             echo "RELEASE_TAG=$RELEASE_TAG"
           } >> "$GITHUB_ENV"
 
-      - name: Sincronizar root helper do payload CZG3
+      - name: Sincronizar root helper do feed de produção
         run: |
           set -euo pipefail
 
-          # Do not resolve the companion payload repository through the anonymous
-          # REST API. GitHub-hosted runners share anonymous API quotas and can hit
-          # HTTP 403 before the build even starts. A shallow public git clone pins
-          # main to one exact commit without consuming the REST/raw API quota.
           PAYLOAD_CHECKOUT="$RUNNER_TEMP/root-my-galaxy-payloads"
           rm -rf "$PAYLOAD_CHECKOUT"
           git clone --quiet --depth=1 --branch main \
@@ -99,69 +95,69 @@ jobs:
               raise SystemExit(f"Payload manifest is missing: {manifest_path}")
           manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-          targets = [
-              target for target in manifest.get("payloads", [])
-              if target.get("payloadId") == "pa3q-S938BXXSBCZG3"
-          ]
-          if len(targets) != 1:
-              raise SystemExit("Expected exactly one CZG3 v3 payload entry")
-          target = targets[0]
-          helper = target.get("rootHelper")
-          exploit_url = target.get("exploit", {}).get("url", "")
+          helpers = []
+          mutable_prefix = f"https://raw.githubusercontent.com/{repo}/main/"
+          for target in manifest.get("payloads", []):
+              helper = target.get("rootHelper")
+              if helper is None:
+                  continue
+              url = str(helper.get("url", ""))
+              if not url.startswith(mutable_prefix):
+                  raise SystemExit(
+                      f"Unexpected rootHelper URL for {target.get('payloadId')}: {url}"
+                  )
+              helpers.append((target.get("payloadId"), helper, url.removeprefix(mutable_prefix)))
+
+          if not helpers:
+              raise SystemExit("Production v3 feed contains no rootHelper contract")
+
+          contracts = {
+              (int(helper["size"]), str(helper["sha256"]).lower())
+              for _, helper, _ in helpers
+          }
+          if len(contracts) != 1:
+              details = ", ".join(
+                  f"{payload_id}={helper['size']}/{helper['sha256']}"
+                  for payload_id, helper, _ in helpers
+              )
+              raise SystemExit(
+                  "Production targets require different bundled root helpers. "
+                  f"Split the app helper contract before releasing: {details}"
+              )
+
+          expected_size, expected_sha = next(iter(contracts))
+          payload_id, helper, path = helpers[0]
+          source = checkout / path
+          if not source.is_file():
+              raise SystemExit(
+                  f"rootHelper is missing from pinned payload commit {commit}: {path}"
+              )
+          data = source.read_bytes()
+          digest = hashlib.sha256(data).hexdigest()
+          if len(data) != expected_size:
+              raise SystemExit(
+                  f"rootHelper size mismatch: expected={expected_size} actual={len(data)}"
+              )
+          if digest != expected_sha:
+              raise SystemExit(
+                  f"rootHelper SHA-256 mismatch: expected={expected_sha} actual={digest}"
+              )
 
           destination = pathlib.Path(
               "app/src/main/jniLibs/arm64-v8a/libcve43499root.so"
           )
           if not destination.is_file():
               raise SystemExit(f"Bundled root helper is missing: {destination}")
-
-          if helper is None:
-              # Transitional compatibility: v0265 predates rootHelper metadata.
-              # A v0266 feed without metadata is an invalid partial publication.
-              if "-v0266/" in exploit_url:
-                  raise SystemExit("CZG3 v0266 feed is missing rootHelper metadata")
-              data = destination.read_bytes()
-              digest = hashlib.sha256(data).hexdigest()
-              print(
-                  "Payload feed has no rootHelper metadata (v0265 transition); "
-                  "preserving the helper committed in the app"
-              )
-              synced = "false"
-          else:
-              mutable_prefix = f"https://raw.githubusercontent.com/{repo}/main/"
-              url = helper.get("url", "")
-              if not url.startswith(mutable_prefix):
-                  raise SystemExit(f"Unexpected rootHelper URL: {url}")
-              path = url.removeprefix(mutable_prefix)
-              if not path.startswith("artifacts/pa3q-S938BXXSBCZG3-v0266/"):
-                  raise SystemExit(f"Unexpected CZG3 rootHelper path: {path}")
-
-              source = checkout / path
-              if not source.is_file():
-                  raise SystemExit(
-                      f"rootHelper is missing from pinned payload commit {commit}: {path}"
-                  )
-              data = source.read_bytes()
-
-              expected_size = int(helper["size"])
-              expected_sha = str(helper["sha256"]).lower()
-              digest = hashlib.sha256(data).hexdigest()
-              if len(data) != expected_size:
-                  raise SystemExit(
-                      f"rootHelper size mismatch: expected={expected_size} actual={len(data)}"
-                  )
-              if digest != expected_sha:
-                  raise SystemExit(
-                      f"rootHelper SHA-256 mismatch: expected={expected_sha} actual={digest}"
-                  )
-              destination.write_bytes(data)
-              synced = "true"
-              print(f"Embedded rootHelper from payload commit {commit}: {digest}")
+          destination.write_bytes(data)
+          print(
+              f"Embedded shared production rootHelper from {payload_id} at payload "
+              f"commit {commit}: {digest}"
+          )
 
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
               env.write(f"PAYLOAD_COMMIT={commit}\n")
               env.write(f"ROOT_HELPER_SHA256={digest}\n")
-              env.write(f"ROOT_HELPER_SYNCED={synced}\n")
+              env.write("ROOT_HELPER_SYNCED=true\n")
           PY
 
           rm -rf "$PAYLOAD_CHECKOUT"
@@ -209,9 +205,6 @@ jobs:
             -PreleaseVersionCode="$VERSION_CODE" \
             -PreleaseVersionName="$VERSION_NAME"
 
-          # The helper is an executable ELF placed under jniLibs only so Android
-          # extracts it into nativeLibraryDir. Its exact feed hash is part of the
-          # runtime contract, so verify the bytes *after* AGP packaging/stripping.
           python3 - <<'PY'
           import hashlib
           import os
