@@ -64,7 +64,7 @@ jobs:
             echo "RELEASE_TAG=$RELEASE_TAG"
           } >> "$GITHUB_ENV"
 
-      - name: Sincronizar root helper do feed de produção
+      - name: Preparar snapshot validado de payloads de produção
         run: |
           set -euo pipefail
 
@@ -79,86 +79,18 @@ jobs:
             echo "Payload repository returned an invalid main commit SHA: $PAYLOAD_COMMIT" >&2
             exit 1
           fi
-          export PAYLOAD_CHECKOUT PAYLOAD_COMMIT
 
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          import pathlib
+          python3 .github/scripts/prepare_production_payload_bundle.py "$PAYLOAD_CHECKOUT" \
+            | tee "$RUNNER_TEMP/production-payload-provenance.txt"
 
-          repo = os.environ["PAYLOAD_REPO"]
-          commit = os.environ["PAYLOAD_COMMIT"]
-          checkout = pathlib.Path(os.environ["PAYLOAD_CHECKOUT"])
-          manifest_path = checkout / "support/targets-v3.json"
-          if not manifest_path.is_file():
-              raise SystemExit(f"Payload manifest is missing: {manifest_path}")
-          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          ROOT_HELPER_SHA256="$(grep '^helper_sha256=' "$RUNNER_TEMP/production-payload-provenance.txt" | cut -d= -f2)"
+          test -n "$ROOT_HELPER_SHA256"
 
-          helpers = []
-          mutable_prefix = f"https://raw.githubusercontent.com/{repo}/main/"
-          for target in manifest.get("payloads", []):
-              helper = target.get("rootHelper")
-              if helper is None:
-                  continue
-              url = str(helper.get("url", ""))
-              if not url.startswith(mutable_prefix):
-                  raise SystemExit(
-                      f"Unexpected rootHelper URL for {target.get('payloadId')}: {url}"
-                  )
-              helpers.append((target.get("payloadId"), helper, url.removeprefix(mutable_prefix)))
-
-          if not helpers:
-              raise SystemExit("Production v3 feed contains no rootHelper contract")
-
-          contracts = {
-              (int(helper["size"]), str(helper["sha256"]).lower())
-              for _, helper, _ in helpers
-          }
-          if len(contracts) != 1:
-              details = ", ".join(
-                  f"{payload_id}={helper['size']}/{helper['sha256']}"
-                  for payload_id, helper, _ in helpers
-              )
-              raise SystemExit(
-                  "Production targets require different bundled root helpers. "
-                  f"Split the app helper contract before releasing: {details}"
-              )
-
-          expected_size, expected_sha = next(iter(contracts))
-          payload_id, helper, path = helpers[0]
-          source = checkout / path
-          if not source.is_file():
-              raise SystemExit(
-                  f"rootHelper is missing from pinned payload commit {commit}: {path}"
-              )
-          data = source.read_bytes()
-          digest = hashlib.sha256(data).hexdigest()
-          if len(data) != expected_size:
-              raise SystemExit(
-                  f"rootHelper size mismatch: expected={expected_size} actual={len(data)}"
-              )
-          if digest != expected_sha:
-              raise SystemExit(
-                  f"rootHelper SHA-256 mismatch: expected={expected_sha} actual={digest}"
-              )
-
-          destination = pathlib.Path(
-              "app/src/main/jniLibs/arm64-v8a/libcve43499root.so"
-          )
-          if not destination.is_file():
-              raise SystemExit(f"Bundled root helper is missing: {destination}")
-          destination.write_bytes(data)
-          print(
-              f"Embedded shared production rootHelper from {payload_id} at payload "
-              f"commit {commit}: {digest}"
-          )
-
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              env.write(f"PAYLOAD_COMMIT={commit}\n")
-              env.write(f"ROOT_HELPER_SHA256={digest}\n")
-              env.write("ROOT_HELPER_SYNCED=true\n")
-          PY
+          {
+            echo "PAYLOAD_COMMIT=$PAYLOAD_COMMIT"
+            echo "ROOT_HELPER_SHA256=$ROOT_HELPER_SHA256"
+            echo "ROOT_HELPER_SYNCED=true"
+          } >> "$GITHUB_ENV"
 
           rm -rf "$PAYLOAD_CHECKOUT"
 
@@ -195,6 +127,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s app/src/main/jniLibs/arm64-v8a/libcve43499root.so
+          test -s app/src/main/assets/production-payloads/targets-v3.json
           actual_helper_sha="$(sha256sum app/src/main/jniLibs/arm64-v8a/libcve43499root.so | awk '{print $1}')"
           test "$actual_helper_sha" = "$ROOT_HELPER_SHA256"
           chmod +x gradlew
@@ -207,24 +140,45 @@ jobs:
 
           python3 - <<'PY'
           import hashlib
+          import json
           import os
           import zipfile
 
           apk = "app/build/outputs/apk/release/app-release-unsigned.apk"
-          member = "lib/arm64-v8a/libcve43499root.so"
-          expected = os.environ["ROOT_HELPER_SHA256"].lower()
+          prefix = "https://raw.githubusercontent.com/igorcv88/Root-My-Galaxy-Payloads-Extended/main/"
+          manifest_name = "assets/production-payloads/targets-v3.json"
+          provenance_name = "assets/production-payloads/provenance.txt"
+          helper_name = "lib/arm64-v8a/libcve43499root.so"
+
           with zipfile.ZipFile(apk) as archive:
-              try:
-                  data = archive.read(member)
-              except KeyError as error:
-                  raise SystemExit(f"Packaged root helper is missing: {member}") from error
-          actual = hashlib.sha256(data).hexdigest()
-          if actual != expected:
-              raise SystemExit(
-                  "Packaged root helper SHA-256 drifted during Android build: "
-                  f"expected={expected} actual={actual} size={len(data)}"
-              )
-          print(f"Packaged root helper verified byte-for-byte: {actual} size={len(data)}")
+              manifest = json.loads(archive.read(manifest_name))
+              helpers = set()
+              for target in manifest["payloads"]:
+                  for key in ("exploit", "kernelsu", "rootHelper"):
+                      artifact = target.get(key)
+                      if not artifact:
+                          continue
+                      url = artifact["url"]
+                      if not url.startswith(prefix):
+                          raise SystemExit(f"External artifact URL reached production APK: {url}")
+                      relative = url.removeprefix(prefix)
+                      member = "assets/production-payloads/" + relative
+                      data = archive.read(member)
+                      actual = hashlib.sha256(data).hexdigest()
+                      if len(data) != int(artifact["size"]) or actual != artifact["sha256"]:
+                          raise SystemExit(f"Bundled artifact verification failed: {member}")
+                      if key == "rootHelper":
+                          helpers.add((int(artifact["size"]), artifact["sha256"]))
+
+              if len(helpers) != 1:
+                  raise SystemExit(f"Invalid production helper contract: {helpers}")
+              expected_size, expected_sha = next(iter(helpers))
+              helper = archive.read(helper_name)
+              if len(helper) != expected_size or hashlib.sha256(helper).hexdigest() != expected_sha:
+                  raise SystemExit("Packaged JNI helper drifted from bundled production feed")
+              if expected_sha != os.environ["ROOT_HELPER_SHA256"]:
+                  raise SystemExit("Packaged helper differs from production snapshot")
+              print(archive.read(provenance_name).decode("utf-8"), end="")
           PY
 
       - name: Preparar chave de assinatura
@@ -305,7 +259,7 @@ jobs:
           ### Payload provenance
           - Payload commit: \`$PAYLOAD_COMMIT\`
           - Root helper SHA-256: \`$ROOT_HELPER_SHA256\`
-          - Root helper synchronized from feed: \`$ROOT_HELPER_SYNCED\`
+          - Bundled production snapshot: \`true\`
           EOF
           test -s "$NOTES_PATH"
           echo "NOTES_PATH=$NOTES_PATH" >> "$GITHUB_ENV"
