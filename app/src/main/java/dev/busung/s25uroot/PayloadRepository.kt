@@ -2,13 +2,9 @@ package dev.busung.s25uroot
 
 import android.content.Context
 import android.system.Os
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.security.MessageDigest
-import org.json.JSONObject
 
 data class VerifiedPayloads(
     val profile: TargetProfile,
@@ -19,18 +15,17 @@ data class VerifiedPayloads(
 
 class PayloadRepository(private val context: Context) {
     fun loadTargets(): List<TargetProfile> {
-        val commit = resolveMainCommit()
-        val manifestBytes = downloadBytes(rawUrl(commit, "support/targets-v3.json"), MAX_MANIFEST_BYTES)
+        val manifestBytes = context.assets.open(PRODUCTION_MANIFEST_ASSET).use { it.readBytes() }
         return SupportManifest.parse(manifestBytes).targets.map { profile ->
             profile.copy(
-                exploit = profile.exploit.copy(url = pinArtifactUrl(profile.exploit.url, commit)),
+                exploit = profile.exploit.copy(url = validateProductionUrl(profile.exploit.url)),
                 kernelSu = profile.kernelSu.copy(
                     artifact = profile.kernelSu.artifact.copy(
-                        url = pinArtifactUrl(profile.kernelSu.artifact.url, commit),
+                        url = validateProductionUrl(profile.kernelSu.artifact.url),
                     ),
                 ),
                 rootHelper = profile.rootHelper?.copy(
-                    url = pinArtifactUrl(profile.rootHelper.url, commit),
+                    url = validateProductionUrl(profile.rootHelper.url),
                 ),
             )
         }
@@ -65,19 +60,19 @@ class PayloadRepository(private val context: Context) {
             return payloads
         }
 
-        onProgress("Payload source: online support feed")
-        val directory = File(context.filesDir, "payloads/manual-online/${profile.profileId}")
+        onProgress("Payload source: bundled production payload snapshot")
+        val directory = File(context.filesDir, "payloads/production-bundled/${profile.profileId}")
         directory.deleteRecursively()
         require(directory.mkdirs() || directory.isDirectory) {
             context.getString(R.string.repo_finalize_failed, directory.name)
         }
-        val exploit = downloadArtifact(
+        val exploit = materializeArtifact(
             profile.exploit,
             File(directory, "cve-2026-43499-app.so"),
             context.getString(R.string.artifact_exploit),
             onProgress,
         )
-        val kernelSu = downloadArtifact(
+        val kernelSu = materializeArtifact(
             profile.kernelSu.artifact,
             File(directory, "ksud-s25u-kdp"),
             context.getString(R.string.artifact_kernelsu),
@@ -93,6 +88,7 @@ class PayloadRepository(private val context: Context) {
 
     private fun verifyBundledRootHelper(profile: TargetProfile) {
         val expected = profile.rootHelper ?: return
+        validateProductionUrl(expected.url)
         val helper = File(context.applicationInfo.nativeLibraryDir, ROOT_HELPER_LIBRARY)
         require(helper.isFile) {
             "The required root helper is not bundled in Root My Galaxy ${BuildConfig.VERSION_NAME}"
@@ -111,36 +107,21 @@ class PayloadRepository(private val context: Context) {
         }
     }
 
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                digest.update(buffer, 0, count)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
-
-    private fun downloadArtifact(
+    private fun materializeArtifact(
         artifact: RemoteArtifact,
         destination: File,
         label: String,
         onProgress: (String) -> Unit,
     ): File {
-        onProgress(context.getString(R.string.repo_downloading, label))
+        val assetPath = productionAssetPath(artifact.url)
+        onProgress("Loading bundled production $label")
         val temporary = File(destination.parentFile, "${destination.name}.part")
         if (temporary.exists()) temporary.delete()
-        val connection = open(artifact.url)
+
         try {
-            require(connection.contentLengthLong == -1L || connection.contentLengthLong == artifact.size) {
-                context.getString(R.string.repo_size_mismatch, label)
-            }
             val digest = MessageDigest.getInstance("SHA-256")
             var total = 0L
-            connection.inputStream.use { input ->
+            context.assets.open(assetPath).use { input ->
                 FileOutputStream(temporary).use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     while (true) {
@@ -159,7 +140,7 @@ class PayloadRepository(private val context: Context) {
             require(total == artifact.size) { context.getString(R.string.repo_incomplete, label) }
             val actualSha256 = digest.digest().joinToString("") { "%02x".format(it) }
             require(actualSha256 == artifact.sha256) {
-                "$label SHA-256 does not match the support manifest"
+                "$label SHA-256 does not match the bundled production manifest"
             }
             if (destination.exists()) destination.delete()
             require(temporary.renameTo(destination)) {
@@ -168,70 +149,53 @@ class PayloadRepository(private val context: Context) {
         } catch (error: Throwable) {
             temporary.delete()
             throw error
-        } finally {
-            connection.disconnect()
         }
-        onProgress(context.getString(R.string.repo_verified, label))
+        onProgress("Bundled production $label verified")
         return destination
     }
 
-    private fun resolveMainCommit(): String {
-        val response = downloadBytes(COMMIT_API_URL, MAX_COMMIT_RESPONSE_BYTES)
-        val commit = JSONObject(response.toString(Charsets.UTF_8))
-            .getJSONObject("object")
-            .getString("sha")
-        require(commit.matches(Regex("[0-9a-f]{40}"))) { context.getString(R.string.repo_commit_invalid) }
-        return commit
+    private fun validateProductionUrl(url: String): String {
+        require(url.startsWith(PRODUCTION_RAW_PREFIX)) {
+            "Root My Galaxy refuses non-production payload repository URL: $url"
+        }
+        productionAssetPath(url)
+        return url
     }
 
-    private fun rawUrl(commit: String, path: String) = "$RAW_REPOSITORY/$commit/$path"
-
-    private fun pinArtifactUrl(url: String, commit: String): String {
-        require(url.startsWith(MUTABLE_RAW_PREFIX)) { context.getString(R.string.repo_url_invalid) }
-        return "$RAW_REPOSITORY/$commit/${url.removePrefix(MUTABLE_RAW_PREFIX)}"
+    private fun productionAssetPath(url: String): String {
+        require(url.startsWith(PRODUCTION_RAW_PREFIX)) {
+            "Root My Galaxy refuses non-production payload repository URL: $url"
+        }
+        val relative = url.removePrefix(PRODUCTION_RAW_PREFIX)
+        require(
+            relative.isNotBlank() &&
+                !relative.startsWith('/') &&
+                relative.split('/').none { it == ".." },
+        ) { "Unsafe production payload path: $relative" }
+        return "$PRODUCTION_ASSET_ROOT/$relative"
     }
 
-    private fun downloadBytes(url: String, maximum: Int): ByteArray {
-        val connection = open(url)
-        return try {
-            connection.inputStream.use { input ->
-                val output = ByteArrayOutputStream()
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    require(output.size() + count <= maximum) {
-                        context.getString(R.string.repo_response_too_large)
-                    }
-                    output.write(buffer, 0, count)
-                }
-                output.toByteArray()
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
             }
-        } finally {
-            connection.disconnect()
         }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
-
-    private fun open(url: String): HttpURLConnection =
-        (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15_000
-            readTimeout = 60_000
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "RootMyGalaxy/${BuildConfig.VERSION_NAME}")
-            connect()
-            require(responseCode == HttpURLConnection.HTTP_OK) { "HTTP $responseCode" }
-        }
 
     companion object {
         private const val OFFLINE_REQUEST_PREFIX = "offline-cache:"
-        private const val PAYLOAD_REPOSITORY = "igorcv88/Root-My-Galaxy-Payloads-Extended"
-        private const val COMMIT_API_URL =
-            "https://api.github.com/repos/$PAYLOAD_REPOSITORY/git/ref/heads/main"
-        private const val RAW_REPOSITORY =
-            "https://raw.githubusercontent.com/$PAYLOAD_REPOSITORY"
-        private const val MUTABLE_RAW_PREFIX = "$RAW_REPOSITORY/main/"
-        private const val MAX_COMMIT_RESPONSE_BYTES = 16 * 1024
-        private const val MAX_MANIFEST_BYTES = 256 * 1024
+        private const val PRODUCTION_PAYLOAD_REPOSITORY =
+            "igorcv88/Root-My-Galaxy-Payloads-Extended"
+        private const val PRODUCTION_RAW_PREFIX =
+            "https://raw.githubusercontent.com/$PRODUCTION_PAYLOAD_REPOSITORY/main/"
+        private const val PRODUCTION_ASSET_ROOT = "production-payloads"
+        private const val PRODUCTION_MANIFEST_ASSET = "$PRODUCTION_ASSET_ROOT/targets-v3.json"
         private const val ROOT_HELPER_LIBRARY = "libcve43499root.so"
 
         fun offlineRequest(profileId: String?): String =
