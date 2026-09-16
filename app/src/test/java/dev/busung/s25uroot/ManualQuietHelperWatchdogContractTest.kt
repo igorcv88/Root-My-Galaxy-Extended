@@ -1,7 +1,6 @@
 package dev.busung.s25uroot
 
 import java.io.File
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -14,15 +13,17 @@ class ManualQuietHelperWatchdogContractTest {
     }
 
     @Test
-    fun manualExploitDoesNotTreatQuietHelperSilenceAsFailure() {
+    fun manualExploitKeepsLabsWatchdogFlowWithExtendedThreshold() {
         val viewModel = source("InstallViewModel.kt")
 
-        assertFalse(viewModel.contains("EXPLOIT_STALL_MILLIS"))
+        assertTrue(viewModel.contains("private const val EXPLOIT_STALL_MILLIS = 900_000L"))
+        assertTrue(viewModel.contains("private const val EXPLOIT_TOTAL_MILLIS = 900_000L"))
+        assertTrue(viewModel.contains("now - lastProgressAt < EXPLOIT_STALL_MILLIS"))
         assertTrue(
             viewModel.contains(
                 "SystemClock.elapsedRealtime() - startedAt < EXPLOIT_TOTAL_MILLIS",
-            ),
+            ) || viewModel.contains("now - startedAt < EXPLOIT_TOTAL_MILLIS"),
         )
-        assertTrue(viewModel.contains("stallTimeoutMs = EXPLOIT_TOTAL_MILLIS"))
+        assertTrue(viewModel.contains("stallTimeoutMs = EXPLOIT_STALL_MILLIS"))
     }
 }
