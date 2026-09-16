@@ -418,18 +418,20 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
 
         try {
             val startedAt = SystemClock.elapsedRealtime()
+            var lastProgressAt = startedAt
             var lastRawLog = ""
             while (process.isAlive) {
                 val rawLog = readLog()
                 if (rawLog != lastRawLog) {
                     publishExploitLog(logPrefix, rawLog)
                     lastRawLog = rawLog
+                    lastProgressAt = SystemClock.elapsedRealtime()
                 }
-                // The quiet root helper intentionally produces no transport output
-                // while the scheduler-sensitive payload is alive. A silence-based
-                // watchdog would therefore kill a healthy Manual run. Keep only the
-                // absolute exploit deadline here; diagnostics are relayed after exit.
-                require(SystemClock.elapsedRealtime() - startedAt < EXPLOIT_TOTAL_MILLIS) {
+                val now = SystemClock.elapsedRealtime()
+                require(now - lastProgressAt < EXPLOIT_STALL_MILLIS) {
+                    app.getString(R.string.error_exploit_stalled)
+                }
+                require(now - startedAt < EXPLOIT_TOTAL_MILLIS) {
                     app.getString(R.string.error_exploit_timeout)
                 }
                 delay(
@@ -498,7 +500,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         val streamed = session.runStreaming(
             command = command,
             overallTimeoutMs = EXPLOIT_TOTAL_MILLIS,
-            stallTimeoutMs = EXPLOIT_TOTAL_MILLIS,
+            stallTimeoutMs = EXPLOIT_STALL_MILLIS,
             onOutput = { snapshot -> publishExploitLog(logPrefix, snapshot) },
         )
         val remoteLog = session.readLog(SHIZUKU_LOG_PATH)
@@ -881,6 +883,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     private fun File.readTextIfPresent(): String = if (exists()) readText() else ""
 
     companion object {
+        private const val EXPLOIT_STALL_MILLIS = 900_000L
         private const val EXPLOIT_TOTAL_MILLIS = 900_000L
         private const val HELPER_TIMEOUT_MILLIS = 120_000L
         private const val AUTO_LATE_LOAD_WAIT_MILLIS = 8_000L
