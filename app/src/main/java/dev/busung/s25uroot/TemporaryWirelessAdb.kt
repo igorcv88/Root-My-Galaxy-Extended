@@ -5,6 +5,8 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.delay
@@ -13,8 +15,12 @@ import kotlinx.coroutines.sync.withLock
 
 /**
  * RMG treats Wireless Debugging as a short-lived transport, never as persistent
- * device state. Every owned session ends by forcing adb_wifi_enabled=0 even if
- * it was already enabled when RMG entered the path.
+ * device state.
+ *
+ * A very short handoff grace is kept between consecutive local-ADB users. This
+ * avoids tearing adbd down between the exploit transport and the immediately
+ * following KernelSU handoff, while still forcing Wireless Debugging off a few
+ * seconds after the last owner releases it.
  *
  * A best-effort alarm is also armed before enabling it. If the app process dies
  * during the narrow ADB window, the receiver still gets a chance to force the
@@ -27,11 +33,15 @@ import kotlinx.coroutines.sync.withLock
  */
 internal object TemporaryWirelessAdb {
     private val sessionMutex = Mutex()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val cleanupLock = Any()
+    private var pendingGraceDisable: Runnable? = null
 
     fun begin(
         context: Context,
         onLog: (String) -> Unit = {},
     ): Boolean {
+        cancelGraceDisable()
         armCleanup(context)
         val enabled = AdbPairing.enableWirelessAdb(context)
         if (enabled) {
@@ -56,7 +66,7 @@ internal object TemporaryWirelessAdb {
             if (settleMillis > 0) delay(settleMillis)
             block()
         } finally {
-            forceDisable(context, onLog)
+            scheduleGraceDisable(context, onLog)
         }
     }
 
@@ -64,6 +74,7 @@ internal object TemporaryWirelessAdb {
         context: Context,
         onLog: (String) -> Unit = {},
     ) {
+        cancelGraceDisable()
         val disabled = runCatching { AdbPairing.disableWirelessAdb(context) }.getOrDefault(false)
         cancelCleanup(context)
         if (disabled) {
@@ -71,6 +82,32 @@ internal object TemporaryWirelessAdb {
         } else {
             Log.e(TAG, "Failed to force Wireless Debugging off")
             onLog("[!] Failed to force Wireless Debugging off")
+        }
+    }
+
+    private fun scheduleGraceDisable(
+        context: Context,
+        onLog: (String) -> Unit,
+    ) {
+        val appContext = context.applicationContext
+        val task = Runnable {
+            synchronized(cleanupLock) {
+                pendingGraceDisable = null
+            }
+            forceDisable(appContext)
+        }
+        synchronized(cleanupLock) {
+            pendingGraceDisable?.let(mainHandler::removeCallbacks)
+            pendingGraceDisable = task
+            mainHandler.postDelayed(task, HANDOFF_GRACE_MILLIS)
+        }
+        onLog("[*] Wireless Debugging cleanup deferred for local ADB handoff")
+    }
+
+    private fun cancelGraceDisable() {
+        synchronized(cleanupLock) {
+            pendingGraceDisable?.let(mainHandler::removeCallbacks)
+            pendingGraceDisable = null
         }
     }
 
@@ -99,6 +136,7 @@ internal object TemporaryWirelessAdb {
 
     const val ACTION_FORCE_DISABLE = "dev.busung.s25uroot.action.FORCE_DISABLE_WIRELESS_ADB"
     private const val CLEANUP_REQUEST_CODE = 0x57414442
+    private const val HANDOFF_GRACE_MILLIS = 5_000L
     private const val FAILSAFE_DISABLE_DELAY_MILLIS = 20 * 60 * 1_000L
     private const val TAG = "RmgTemporaryWirelessAdb"
 }

@@ -82,7 +82,7 @@ internal object WirelessAdbDiagnostics {
                     settleMillis = ENABLE_SETTLE_MILLIS,
                 ) {
                     val port = AdbPairing.discoverConnectPort(context, DISCOVERY_TIMEOUT_MILLIS)
-                    if (port <= 0) throw MdnsConnectPortNotFoundException()
+                    if (port <= 0) throw ConnectPortNotFoundException()
                     discoveredPort = port
 
                     val keyManager = AdbKeyManager(context)
@@ -111,7 +111,7 @@ internal object WirelessAdbDiagnostics {
                     LocalAdbClient.PAIRING_LOST_MARKER in (error.message ?: "")
                 val state = when {
                     pairingRejected -> WirelessAdbAuthState.PairingRejected
-                    error is MdnsConnectPortNotFoundException -> WirelessAdbAuthState.MdnsUnavailable
+                    error is ConnectPortNotFoundException -> WirelessAdbAuthState.MdnsUnavailable
                     else -> WirelessAdbAuthState.ConnectionFailed
                 }
                 if (pairingRejected) AppPreferences.setAdbPaired(context, false)
@@ -124,15 +124,15 @@ internal object WirelessAdbDiagnostics {
                         WirelessAdbAuthState.PairingRejected ->
                             "adbd rejected RMG's TLS certificate; re-pairing is required"
                         WirelessAdbAuthState.MdnsUnavailable ->
-                            "Wireless Debugging connect service was not found through mDNS"
+                            "Local ADB connect port was not found through service.adb.tls.port or mDNS"
                         else -> error.message ?: error.javaClass.simpleName
                     },
                 )
             }
         }
 
-    private class MdnsConnectPortNotFoundException : IOException(
-        "Wireless Debugging connect port not found via mDNS",
+    private class ConnectPortNotFoundException : IOException(
+        "Local ADB connect port not found via service.adb.tls.port or mDNS",
     )
 
     private const val ENABLE_SETTLE_MILLIS = 1_000L
