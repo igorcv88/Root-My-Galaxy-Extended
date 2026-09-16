@@ -64,8 +64,8 @@ internal fun chooseManualRunTransport(
     localAdbPaired: Boolean,
 ): ManualRunTransport? {
     if (shellRequired) {
-        if (localAdbPaired) return ManualRunTransport.LocalAdb
-        return if (shizukuRequested && shizukuUsable) ManualRunTransport.Shizuku else null
+        if (shizukuRequested && shizukuUsable) return ManualRunTransport.Shizuku
+        return if (localAdbPaired) ManualRunTransport.LocalAdb else null
     }
     if (shizukuRequested && shizukuUsable) return ManualRunTransport.Shizuku
     return if (shizukuRequested) null else ManualRunTransport.App
@@ -283,18 +283,8 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         val shellRequired = profile.routePolicy.prefersShellTransport
         val localAdbPaired = AppPreferences.adbPaired(app)
 
-        // ZZI4 was hardware-validated through the paired Local ADB shell. Keep
-        // that launch path deterministic even when a Shizuku binder happens to
-        // be alive after boot; the exploit is scheduler-sensitive despite both
-        // transports reporting uid=2000 / u:r:shell:s0.
-        if (profile.profileId == "pa3q-S938BXXUCZZI4" && shellRequired && localAdbPaired) {
-            appendLog("[*] ZZI4 Manual transport pinned to paired Local ADB shell")
-            return ManualRunTransport.LocalAdb
-        }
-        if (profile.profileId == "pa3q-S938BXXUCZZI4" && shellRequired && !localAdbPaired) {
-            appendLog("[*] ZZI4 Local ADB pin unavailable: adbPaired=false; evaluating Shizuku shell")
-        }
-
+        // Finalize transport before payload staging/exploit launch. Once selected,
+        // the transport is not re-evaluated inside the scheduler-sensitive path.
         val requestedShizuku = AppPreferences.shizukuMode(app)
         var shizukuUsable = false
         if (requestedShizuku) {
@@ -433,7 +423,6 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             while (process.isAlive) {
                 val rawLog = readLog()
                 if (rawLog != lastRawLog) {
-                    if (policy.p0OffsetCache) cacheP0Offset(bootToken, rawLog)
                     publishExploitLog(logPrefix, rawLog)
                     lastRawLog = rawLog
                     lastProgressAt = SystemClock.elapsedRealtime()

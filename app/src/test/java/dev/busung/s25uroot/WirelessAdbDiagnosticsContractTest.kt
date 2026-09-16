@@ -19,6 +19,16 @@ class WirelessAdbDiagnosticsContractTest {
     }
 
     @Test
+    fun localAdbPortDiscoveryDoesNotRequireMdnsOrWifi() {
+        val source = File("src/main/java/dev/busung/s25uroot/AdbPairing.kt").readText()
+
+        assertTrue(source.contains("service.adb.tls.port"))
+        assertTrue(source.contains("readTlsPortProperty"))
+        assertTrue(source.contains("127.0.0.1"))
+        assertTrue(source.contains("AdbMdns(context, AdbMdns.TLS_CONNECT)"))
+    }
+
+    @Test
     fun rePairCanBypassHistoricalPairingFlag() {
         val source = File("src/main/java/dev/busung/s25uroot/AdbPairingSetupActivity.kt").readText()
 
@@ -52,5 +62,14 @@ class WirelessAdbDiagnosticsContractTest {
         assertTrue(credentials.contains("SHA-256"))
         assertFalse(ui.contains("adb_private.der"))
         assertFalse(credentials.contains("readBytes()).toString"))
+    }
+
+    @Test
+    fun diagnosticsPanelIsCollapsedByDefault() {
+        val ui = File("src/main/java/dev/busung/s25uroot/ShizukuBootSettingsCard.kt").readText()
+
+        assertTrue(ui.contains("var diagnosticsExpanded by remember { mutableStateOf(false) }"))
+        assertTrue(ui.contains("onClick = { diagnosticsExpanded = !diagnosticsExpanded }"))
+        assertTrue(ui.contains("AnimatedVisibility(visible = diagnosticsExpanded)"))
     }
 }

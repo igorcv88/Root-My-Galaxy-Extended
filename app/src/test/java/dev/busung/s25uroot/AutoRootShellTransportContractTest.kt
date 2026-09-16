@@ -28,7 +28,8 @@ class AutoRootShellTransportContractTest {
         assertTrue(executor.contains("AutoRootShellTransport.Shizuku"))
         assertTrue(executor.contains("AutoRootShellTransport.LocalAdb"))
         assertTrue(executor.contains("AppPreferences.adbPaired(this)"))
-        assertTrue(executor.contains("AUTO_ROOT_SHIZUKU_PREFERENCE_GRACE_MILLIS"))
+        assertTrue(executor.contains("AppPreferences.shizukuMode(this)"))
+        assertTrue(executor.contains("AUTO_ROOT_SHIZUKU_PREFERENCE_GRACE_MILLIS = 15_000L"))
 
         val runnerCall = executor.indexOf("runner.run(")
         val callback = executor.indexOf("beforeExploit = {", runnerCall)

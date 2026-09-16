@@ -161,37 +161,44 @@ open class AutoRootExecutorService : Service() {
                 }
 
                 updateNotification(getString(R.string.autoroot_preparing_exploit))
-                appendHistory("[*] Checking preferred Shizuku shell transport in provider process")
-                ShizukuBootService.startForAutoRoot(this)
-
-                val shizukuRunning =
+                val requestedShizuku = AppPreferences.shizukuMode(this)
+                val shizukuRunning = if (requestedShizuku) {
+                    appendHistory("[*] Checking preferred Shizuku shell transport in provider process")
+                    ShizukuBootService.startForAutoRoot(this)
                     ShizukuController.awaitRunning(AUTO_ROOT_SHIZUKU_PREFERENCE_GRACE_MILLIS)
-                selectedShellTransport = if (shizukuRunning && ShizukuController.isGranted()) {
+                } else {
+                    false
+                }
+                selectedShellTransport = if (
+                    requestedShizuku && shizukuRunning && ShizukuController.isGranted()
+                ) {
                     appendHistory("[+] Shizuku shell transport is ready in provider process")
                     AutoRootShellTransport.Shizuku
                 } else {
                     require(AppPreferences.adbPaired(this)) {
-                        if (shizukuRunning) {
-                            "Shizuku is running but Root My Galaxy is not authorized, and no paired local ADB fallback is available"
-                        } else {
-                            "Shizuku Binder is unavailable and no paired local ADB fallback is available"
+                        when {
+                            !requestedShizuku ->
+                                "Shizuku mode is disabled and no paired local ADB fallback is available"
+                            shizukuRunning ->
+                                "Shizuku is running but Root My Galaxy is not authorized, and no paired local ADB fallback is available"
+                            else ->
+                                "Shizuku Binder is unavailable and no paired local ADB fallback is available"
                         }
                     }
                     appendHistory(
-                        if (shizukuRunning) {
-                            "[!] Shizuku Binder is present but unauthorized; selecting paired local ADB shell fallback"
-                        } else {
-                            "[!] Shizuku Binder was not delivered; selecting paired local ADB shell fallback"
+                        when {
+                            !requestedShizuku ->
+                                "[*] Shizuku mode disabled; selecting paired local ADB shell"
+                            shizukuRunning ->
+                                "[!] Shizuku Binder is present but unauthorized; selecting paired local ADB shell fallback"
+                            else ->
+                                "[!] Shizuku Binder was not delivered; selecting paired local ADB shell fallback"
                         },
                     )
-                    // The boot coordinator may itself be retrying local ADB solely
-                    // to obtain a Binder that this app is not receiving. Stop that
-                    // redundant owner before Auto Root opens its own serialized ADB
-                    // session. This does not stop the already-running Shizuku server.
-                    ShizukuBootService.stop(this)
+                    // Selection ends before AutoRootRunner. Never re-evaluate it later.
+                    if (requestedShizuku) ShizukuBootService.stop(this)
                     AutoRootShellTransport.LocalAdb
                 }
-
                 val selectedHistory = historyEntry ?: error("Auto Root history state missing")
                 historyEntry = selectedHistory.copy(
                     usedShizuku = selectedShellTransport == AutoRootShellTransport.Shizuku,
@@ -440,7 +447,7 @@ open class AutoRootExecutorService : Service() {
         const val MSG_START_AUTO_ROOT = 1
 
         private const val TAG = "RootMyGalaxyAutoRootExec"
-        private const val AUTO_ROOT_SHIZUKU_PREFERENCE_GRACE_MILLIS = 5_000L
+        private const val AUTO_ROOT_SHIZUKU_PREFERENCE_GRACE_MILLIS = 15_000L
         private const val MAX_EXECUTOR_WAKELOCK_MILLIS = 20 * 60 * 1_000L
     }
 }

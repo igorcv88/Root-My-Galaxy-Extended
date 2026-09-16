@@ -6,6 +6,14 @@ on:
       - main
     paths:
       - .github/preflight-trigger
+  pull_request:
+    paths:
+      - app/**
+      - build.gradle*
+      - settings.gradle*
+      - gradle/**
+      - gradlew*
+      - .github/workflows/preflight.yml
 
 permissions:
   contents: read

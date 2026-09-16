@@ -19,9 +19,9 @@ class ManualShellTransportPolicyTest {
     }
 
     @Test
-    fun shellRequiredPairedLocalAdbWinsOverUsableShizuku() {
+    fun shellRequiredPrefersUsableShizukuOverPairedLocalAdb() {
         assertEquals(
-            ManualRunTransport.LocalAdb,
+            ManualRunTransport.Shizuku,
             chooseManualRunTransport(
                 shellRequired = true,
                 shizukuRequested = true,
@@ -31,6 +31,18 @@ class ManualShellTransportPolicyTest {
         )
     }
 
+    @Test
+    fun shellRequiredFallsBackToPairedLocalAdbWhenRequestedShizukuIsUnavailable() {
+        assertEquals(
+            ManualRunTransport.LocalAdb,
+            chooseManualRunTransport(
+                shellRequired = true,
+                shizukuRequested = true,
+                shizukuUsable = false,
+                localAdbPaired = true,
+            ),
+        )
+    }
     @Test
     fun shellRequiredUsesShizukuOnlyWhenLocalAdbUnavailable() {
         assertEquals(
