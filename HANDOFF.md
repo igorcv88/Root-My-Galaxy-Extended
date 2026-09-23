@@ -1,6 +1,6 @@
 # HANDOFF.md — Root My Galaxy current project state
 
-Last updated: 2026-09-22
+Last updated: 2026-09-23
 
 This is the living handoff for the Root My Galaxy project family. It consolidates the previous large Auto Root handoffs, subsequent repository work, the One UI 9 Beta 3 port, the 2026-09-22 transport/payload regression investigation and the current LAB release state.
 
@@ -642,7 +642,7 @@ Observed results:
 Current-source comparison performed against LAB `main` on 2026-09-23:
 
 - `AutoRootService` selects an established shell transport before choosing the effective payload; the shell leg uses the normal bundled feed payload rather than the dedicated physical-P0 fallback asset.
-- `AutoRootRunner` and `InstallViewModel` both request the profile route policy and the normal feed payload for their respective shell execution paths. Their orchestration and helper handling are not identical, but the current Kotlin wiring does not establish a distinct Manual-only KASLR discovery route.
+- `AutoRootRunner` and `InstallViewModel` both request the profile route policy and the normal feed payload for their respective shell execution paths. Both refer to the packaged `libcve43499root.so` helper as their source; staging and process lifecycle differ, but the current Kotlin wiring does not establish a distinct Manual-only KASLR discovery route.
 - The LAB feed currently records `slideRoute=auto` and `prefersShellTransport=true` for exact ZZIC.
 
 Status: the older Auto Root shell-versus-standalone misrouting has not been reproduced by this log. The current failure is observed after the native payload's claimed slide discovery, during the subsequent native stage. This observation does **not** establish whether the accepted slide was correct or which native operation is causally responsible. A successful Manual log from the same firmware, exact payload provenance, and boot context has not been supplied for a controlled comparison.
