@@ -684,3 +684,38 @@ The Manual successful run also revealed **separate post-root behavior** after Ke
 - These warnings occurred *after* confirmed KernelSU control and installation completion. They are post-root principal/readiness or optional automation diagnostics, not evidence that the native root acquisition failed. Do not relaunch the exploit in response.
 
 Disposition: record a shared native-stage failure signature and separate post-root usability warnings. Preserve the Manual and Auto Root implementations, race geometry and retry guard pending independent validation; avoid selecting a purported 'better' KASLR/transport path based only on these three runs. Do not treat success of the APK/release workflow as hardware reliability proof. No source, payload, AGENTS.md, tests, or workflows are changed by this documentation-only update.
+
+
+## 20. Manual transport fallback defect and external research (2026-09-23)
+
+Scope: diagnostic research and architecture proposal only. **No application/native/payload source or test changes are implemented in this task.** Production mirroring of this document is not production feature promotion.
+
+New user-observed symptom: Manual repeatedly chooses Shizuku or paired Local ADB and never reaches an app-local standalone option if Shizuku is down and there is no *actually usable* Local ADB connection (notably when Wi-Fi is disconnected).
+
+Confirmed current LAB source cause:
+
+- `InstallViewModel.chooseManualRunTransport(shellRequired, shizukuRequested, shizukuUsable, localAdbPaired)` treats a *saved pairing record* (`localAdbPaired`) as Local ADB availability. `selectRunTransport()` does not establish a working Local ADB shell session before returning that choice; actual connection is deferred until `runExploitAndKernelSu()`, where failure causes the Manual operation to terminate.
+- The current function explicitly returns `null` when `shellRequired` is true and both Shizuku and the pairing record are unavailable; `selectRunTransport()` then throws. It does not express or select the exact pa3q app-local fallback envelope.
+- Current contract test `ManualShellTransportPolicyTest.shellRequiredNeverFallsBackToAppDomain` explicitly protects this behavior. Its purpose must be reconsidered *only in conjunction with* verified exact standalone identity/provenance; blindly replacing `null` with `App` would execute the ordinary shell-preferred feed payload in the wrong envelope.
+- `AutoRootService.selectTransport()` does a stronger Local ADB readiness check before selecting the transport; `payloadsForTransport()` also isolates the exact standalone policy, and `AutoRootRunner` selects `UniRootZzi4Exploit` for the exact app-local route. These are architecture references for the Manual design, not code that should be indiscriminately copied.
+- Shizuku availability is a live Binder/session/authorization property, not app-installed state and not Wi-Fi availability. A started Shizuku server can remain usable after its startup Wi-Fi is disconnected. Preference for Shizuku should be reconciled with the user's selected transport policy.
+- ADB's saved pairing is separate from a current network path and authenticated shell session. Android's documentation says pairing can persist after network disconnect; Android 17 Wi-Fi 2.0 adds reconnection behavior on trusted networks, making live verification, rather than the presence of pairing metadata, important.
+
+Research checked on 2026-09-23:
+
+- Android Developers ADB documentation: https://developer.android.com/tools/adb (separates pairing from connection and describes Android 17 Wi-Fi behavior).
+- Shizuku API guide: https://github.com/RikkaApps/Shizuku-API (Binder lifecycle, permission, UID distinction).
+- Reference orchestration: https://github.com/kuuky29/UniRoot and current project handoff.
+- Similar root-project native failure report: https://github.com/BuSung-dev/Root-My-Galaxy/issues/280 (similar native log signature on a **different firmware**).
+- Diagnostic isolation example: https://github.com/BuSung-dev/Root-My-Galaxy/issues/652 (another model/firmware, not a transferable fix).
+- XDA thread: https://xdaforums.com/t/one-ui-9-root-zzhl-and-zzi4-sm93xx.4801097/ ; indexed result includes a poster's statement that Shizuku is not required for the S25 series. XDA returned HTTP 403 on full-page retrieval, so do not claim independent full-thread review or treat that comment as ZZIC device validation.
+
+Architecture investigation outcomes:
+
+1. Treat transport eligibility as an observed preflight capability, not merely a stored preference or a saved ADB pairing: active authorized/verified Shizuku, or connected Wi-Fi and an authenticated working Local ADB shell. A live Shizuku Binder can remain independently valid when Wi-Fi disappears.
+2. A no-shell selection may be represented as a separate **exact validated standalone plan** only for targets with such an artifact. Preserve distinct native payload/envelope/policy identities and fail closed if exact asset integrity/firmware identity cannot be established.
+3. Keep transport and payload readiness separate from exploit execution: a connection failure discovered before launch should not consume exploit retry budgets. A failure after launching a native race must not silently trigger a different native envelope in the same uncertain kernel state.
+4. Tests should cover Shizuku running/authorized, absent or permission denied, pairing saved with Wi-Fi disconnected, Wi-Fi connected but unreachable ADB, working authenticated Local ADB, and no usable shell with and without an exact verified standalone asset. Respect existing Manual/Auto Root separation while potentially sharing only the eligibility/policy decision logic.
+5. Investigate the previously observed native failure and the post-KernelSU app-`su` denial as distinct issues. Current three hardware logs do not establish a causal native-timing fix or reliable transport ranking.
+
+Open: implement and validate any Manual transport decision and exact standalone asset integration deliberately in LAB before promoting. This section records a confirmed Manual transport policy defect and research references, **not** a tested correction or a release.
