@@ -645,6 +645,42 @@ Current-source comparison performed against LAB `main` on 2026-09-23:
 - `AutoRootRunner` and `InstallViewModel` both request the profile route policy and the normal feed payload for their respective shell execution paths. Both refer to the packaged `libcve43499root.so` helper as their source; staging and process lifecycle differ, but the current Kotlin wiring does not establish a distinct Manual-only KASLR discovery route.
 - The LAB feed currently records `slideRoute=auto` and `prefersShellTransport=true` for exact ZZIC.
 
-Status: the older Auto Root shell-versus-standalone misrouting has not been reproduced by this log. The current failure is observed after the native payload's claimed slide discovery, during the subsequent native stage. This observation does **not** establish whether the accepted slide was correct or which native operation is causally responsible. A successful Manual log from the same firmware, exact payload provenance, and boot context has not been supplied for a controlled comparison.
+Status: the older Auto Root shell-versus-standalone misrouting has not been reproduced by this log. The current failure is observed after the native payload's claimed slide discovery, during the subsequent native stage. This observation does **not** establish whether the accepted slide was correct or which native operation is causally responsible. Subsequent Manual success and failure logs for the same firmware profile were supplied on 2026-09-23; see section 19. Exact artifact digests and matched kernel-boot context are still unavailable, so these logs are observational, not a controlled comparison.
 
 This update records hardware evidence only. No exploit implementation, race parameters, transport selection, payload bytes, tests, or release workflow were changed. Production implementation and production payloads remain untouched. Preserve this distinction in the next investigation; do not classify this run as a transport failure or a proven KASLR failure.
+
+
+## 19. Cross-run Manual/Auto Root evidence: 2026-09-22 to 2026-09-23
+
+User-provided device logs additionally examined on 2026-09-23:
+
+- `RootMyGalaxy-20260922-211645-succeeded.log.txt`: Manual successful execution using Local ADB on exact ZZIC profile.
+- `RootMyGalaxy-20260923-190951-failed.log.txt`: Manual failed execution using Shizuku on exact ZZIC profile.
+- Compare these with the Auto Root failure documented in section 18.
+
+All three logs report the exact `pa3q-S938BXXUCZZIC` profile and native build label `pa3q-S938BXXUCZZIC-app-tracefs-phys-alias`, shell execution context `uid=2000 u:r:shell:s0`, `slide source mode=auto`, and the feed's configured 24 attempts. Each first attempt reports a tracefs slide candidate accepted by the native logger. The log labels and bundled verification markers do *not* independently prove identical APK/payload bytes between runs; the failed logs also lack an exposed kernel boot ID enabling same-boot matching.
+
+Comparison of the *first occurrence* of the native output (the failed Manual log repeats its entire captured stdout in a later exception message; this is duplicate reporting, not a second set of attempts):
+
+| Path and outcome | Shell transport | Reported slide | Native FOPS observations | Result |
+| --- | --- | --- | --- | --- |
+| Manual 2026-09-22 success | Local ADB | `0x50000` (tracefs candidate hits=2) | First FOPS shot: `pselect ret=0 window=0`, physical write `status=256 ok=0`; second shot: `pselect ret=7 window=1`, physical write `status=0 ok=1`, later physrw verification succeeds | Bootstrap root and KernelSU control acquired |
+| Manual 2026-09-23 failure | Shizuku | `0x1d0000` (tracefs candidate hits=1) | Eight FOPS shots: `pselect ret=0 window=0`, physical write `status=256 ok=0`, no physrw verification | Stops after FOPS eight-shot budget with no root |
+| Auto Root 2026-09-23 failure (section 18) | Local ADB | `0x50000` (tracefs candidate hits=1) | Eight FOPS shots: `pselect ret=0 window=0`, physical write `status=256 ok=0`, no physrw verification | Stops after FOPS eight-shot budget with no root |
+
+Important interpretation boundaries:
+
+- The two failed runs use different *shell transport implementations* but show the same native failure pattern. The successful Local ADB Manual run and failed Local ADB Auto Root run further rule out identifying Local ADB availability alone as the differentiator.
+- The successful run shows a change in the logged `pselect` return/window indicators together with the later physical-write and physrw success. This is a correlation from one successful run, not proof of a causal parameter or recommended native timing modification.
+- Reported slide values differ across executions; kernel address randomization and lack of matched boot IDs mean the values should not be treated as directly comparable. The logger's `slide-kaslr-ok` status is not an independent correctness check.
+- A configured native attempt count of 24 did not mean 24 FOPS shots in the failed runs: the observed dedicated FOPS eight-shot guard terminated those executions. The duplicate exception text in the Manual failure must not be counted as additional attempts.
+- These three runs alone do not establish reliability percentages or a causal preference for Shizuku, Local ADB, Manual, or Auto Root. They do establish that Auto Root's remaining failure is not exclusively caused by its orchestration, since current Manual can reproduce the same native failure signature.
+
+The Manual successful run also revealed **separate post-root behavior** after KernelSU control was verified:
+
+- The best-effort app optimization/dexopt step was skipped because root was not confirmed to that caller.
+- The app-authenticated `su` helper reported `connect daemon: Permission denied`; the application then established Local Wireless ADB fallback and verified `KernelSU --allow-shell` there.
+- Shizuku started through the native-lib path; KernelSU native soft-reboot request was accepted.
+- These warnings occurred *after* confirmed KernelSU control and installation completion. They are post-root principal/readiness or optional automation diagnostics, not evidence that the native root acquisition failed. Do not relaunch the exploit in response.
+
+Disposition: record a shared native-stage failure signature and separate post-root usability warnings. Preserve the Manual and Auto Root implementations, race geometry and retry guard pending independent validation; avoid selecting a purported 'better' KASLR/transport path based only on these three runs. Do not treat success of the APK/release workflow as hardware reliability proof. No source, payload, AGENTS.md, tests, or workflows are changed by this documentation-only update.
