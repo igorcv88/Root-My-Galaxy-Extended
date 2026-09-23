@@ -624,3 +624,27 @@ Do not reopen the 0.1.10–0.1.15 Local-P0 feed policy. That experiment already 
 Do not assume the remaining problem is transport if the current logs prove transport selection and shell identity are correct.
 
 If shell routing is correct and the run still fails, diagnose the native stage from current logs before changing orchestration again.
+
+
+## 18. Hardware evidence: 2026-09-23 ZZIC Auto Root failure
+
+Evidence supplied: user-device run log `RootMyGalaxy-20260923-184832-failed.log.txt` from the exact `pa3q-S938BXXUCZZIC` profile. This records a failed real-device Auto Root run. The log itself does not include an independently verified APK/payload provenance receipt; do not assume the app binary is identical to the release pin solely from the profile label.
+
+Observed results:
+
+- Auto Root selected `local-adb` because Shizuku Binder was unavailable. The paired ADB shell was verified in the log: UID/EUID 2000, SELinux `u:r:shell:s0`.
+- The loaded profile reported `slideRoute=auto`, 24 available attempts, P0 caching enabled and the `pa3q-S938BXXUCZZIC-app-tracefs-phys-alias` native build label.
+- The first native attempt accepted a tracefs-derived slide candidate of `0x50000` (`slide-kaslr-ok source=tracefs`); later attempts reused that value (`source=forced`). The tracefs raw summary reports one candidate with one hit. The reported discovery success is *not* independent proof of the candidate's correctness.
+- Across eight recorded FOPS shots, the native log repeatedly reported `pselect` return, followed by `p0 physical write status=256 ok=0`, `triggered=0`, no verified read/write, and `root=0`.
+- The supervisor stopped at its eight-shot boundary; the final log reports missing exploit success markers and `terminal_result=failure`.
+- No evidence of a KernelSU handoff failure appears in this run: bootstrap root was never reported.
+
+Current-source comparison performed against LAB `main` on 2026-09-23:
+
+- `AutoRootService` selects an established shell transport before choosing the effective payload; the shell leg uses the normal bundled feed payload rather than the dedicated physical-P0 fallback asset.
+- `AutoRootRunner` and `InstallViewModel` both request the profile route policy and the normal feed payload for their respective shell execution paths. Their orchestration and helper handling are not identical, but the current Kotlin wiring does not establish a distinct Manual-only KASLR discovery route.
+- The LAB feed currently records `slideRoute=auto` and `prefersShellTransport=true` for exact ZZIC.
+
+Status: the older Auto Root shell-versus-standalone misrouting has not been reproduced by this log. The current failure is observed after the native payload's claimed slide discovery, during the subsequent native stage. This observation does **not** establish whether the accepted slide was correct or which native operation is causally responsible. A successful Manual log from the same firmware, exact payload provenance, and boot context has not been supplied for a controlled comparison.
+
+This update records hardware evidence only. No exploit implementation, race parameters, transport selection, payload bytes, tests, or release workflow were changed. Production implementation and production payloads remain untouched. Preserve this distinction in the next investigation; do not classify this run as a transport failure or a proven KASLR failure.
