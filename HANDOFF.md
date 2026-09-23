@@ -38,11 +38,17 @@ Do not treat the old pins in those files as current pins. Their architectural ev
 
 Current integrated LAB release:
 
-- Tag: `lab-v0.1.34`
-- Release name: `RMG Labs 0.1.34-lab`
-- Published: 2026-09-22
-- Application source used by the release: `fc0cfdd81020d09be495432d0dca377107aabf3e`
+- Tag: `lab-v0.1.35`
+- Release name: `RMG Labs 0.1.35-lab`
+- Published: 2026-09-23
+- Application source used by the release: `adc998e7e3937d9e9ca1b0bed278224e5ec9d92c`
 - Payload snapshot used by the release: `2eef505d8a3990ea9b0d977401f2db2e2a346dc9`
+- Release-order trigger commit: `3e7bd7573536fe8c0c0eedce036d5aca1bedc964`
+- Release build workflow: `35893046498` (success)
+- Release APK: `RMG-Labs-0.1.35-lab.apk`
+- Published APK SHA-256: `a22651b77d21249239865a6e30d8478b99895025fe4128c59688da945c0c260e`
+
+Previous release: `lab-v0.1.34` (2026-09-22), application source `fc0cfdd81020d09be495432d0dca377107aabf3e`, same payload snapshot `2eef505d8a3990ea9b0d977401f2db2e2a346dc9`.
 
 Current RMGLabs `main` also contains the later release-trigger bookkeeping commit. Do not confuse the trigger commit with the pinned application source that was checked out for the release.
 
@@ -738,6 +744,11 @@ LAB changes on `main` on 2026-09-23, with initial application HEAD before this d
 
 Modified LAB Kotlin components: `InstallViewModel.kt`, `AutoRootRunner.kt`, `AutoRootService.kt`, `AutoRootBootReceiver.kt`, `AutoRootNotification.kt`, `RootRecoveryActions.kt`, `RootHelperShell.kt`, `KernelSuRuntime.kt`. Updated LAB tests: `ManualShellTransportPolicyTest.kt`, `Zzi4PostRootRuntimeTest.kt`.
 
-Validation completed at documentation time: targeted current-source/static contract checks passed for dispatch, exact standalone separation, boot guard, root-status logging, and notification service wiring; this is **not** Android compilation or device validation. CI and release status must be appended after workflow results. Hardware confirmation still required for (a) Manual no-Wi-Fi/no-Shizuku standalone, (b) Manual verified Shizuku, (c) Manual verified Wi-Fi/Local ADB, and (d) Apply Modules with an already-authorized root bridge versus without it.
+Validation completed at documentation time: targeted current-source/static contract checks passed for dispatch, exact standalone separation, boot guard, root-status logging, and notification service wiring; this is **not** Android compilation or device validation. Validation result (updated 2026-09-23):
+- Initial pinned LAB release job `35892511842`: debug and release Kotlin compilation succeeded, but a historical source-string test that forbade *all* Manual references to the UniRoot coordinator failed (126 of 127 unit tests passed). No APK was published from this attempt.
+- Updated `UniRootZzi4AutoRootContractTest.kt` to preserve the meaningful invariant: Manual may reuse the existing exact standalone coordinator but must not hardcode imported standalone binary names or asset paths.
+- Final pinned LAB release job `35893046498`: **success**. Unit tests, lint, release assembly, LAB-only isolation tests, pinned payload provenance, unsigned artifact integrity, signed APK verification and release publication all completed successfully. Publication: `https://github.com/igorcv88/RMGLabs/releases/tag/lab-v0.1.35` (APK SHA-256 `a22651b77d21249239865a6e30d8478b99895025fe4128c59688da945c0c260e`).
+- These are CI/software checks, **not** hardware validation. Confirm the updated Manual live-transport/standalone paths, foreground Apply Modules behavior, KernelSU Manager grant interaction and reboot side effects on real exact ZZIC hardware before considering the UX issues resolved.
+- No changes to native FOPS/race parameters or any LAB or production payload bytes, and no production app code promotion. Hardware confirmation still required for (a) Manual no-Wi-Fi/no-Shizuku standalone, (b) Manual verified Shizuku, (c) Manual verified Wi-Fi/Local ADB, and (d) Apply Modules with an already-authorized root bridge versus without it.
 
 Payload repository remains at `2eef505d8a3990ea9b0d977401f2db2e2a346dc9`; no source, binary, native FOPS/timing, or provenance changes were made there. Production application/payload implementation remains frozen; only this handoff is mirrored to production. Do not characterize lack of native FOPS changes as an established fix to intermittent FOPS misses.
