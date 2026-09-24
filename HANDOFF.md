@@ -1,12 +1,18 @@
 # HANDOFF.md — Root My Galaxy current project state
 
-Last updated: 2026-09-23
+Last updated: 2026-09-24
 
 This is the living handoff for the Root My Galaxy project family. It consolidates the previous large Auto Root handoffs, subsequent repository work, the One UI 9 Beta 3 port, the 2026-09-22 transport/payload regression investigation and the current LAB release state.
 
 Update this file after meaningful implementation or validation work. Keep its copy synchronized between `igorcv88/RMGLabs` and `igorcv88/Root-My-Galaxy-Extended`.
 
 Read `AGENTS.md` first. `AGENTS.md` contains durable rules; this file contains current facts, temporary decisions, unresolved questions and roadmap.
+
+For the DirtyFrag/DFReroot route specifically, also read
+`docs/DFREROOT_DIRTYFRAG_ADDENDUM_2026-09-24.md` (maintainer-authored authoritative
+addendum: full upstream chain map, exact ZZIC evidence, per-boundary gate matrix and
+the RMG success criterion) and `docs/DFREROOT_FEASIBILITY_AND_ARCHITECTURE_2026-09-23.md`.
+Machine-checked values remain sourced from `tools/dfreroot/`.
 
 ## 1. Repository map
 
@@ -1266,3 +1272,283 @@ NEXT testing order:
 Do not promote PR #15 behavior to the production app merely because LAB CI and
 release publication passed. Production promotion requires real hardware results
 for the relevant behavior.
+
+
+## 40. DFR alternative-bootstrap provider abstraction (LAB only, 2026-09-24)
+
+Continuation on branch `claude/dirtyfrag-bootstrap-provider-4h7bj7`, starting
+from the merged LAB 0.1.36 state. This step implements the isolated bootstrap
+**provider abstraction** requested by the DirtyFrag handoff (roadmap items 1–5,
+8, 10, 11, 12, 15). It is software-only. No exploit, KernelSU load, root-helper
+call, SELinux/persistence operation, payload byte, Auto Root / Manual Root hot
+path, production repository or release was changed.
+
+### What was actually implemented (Kotlin, pure/JVM-testable)
+
+- `app/src/main/java/dev/busung/s25uroot/DfrBootstrapProvider.kt`
+  - `DfrBootstrapState` — the eleven explicit states (item 3): `UNAVAILABLE`,
+    `TARGET_MISMATCH`, `PREREQUISITES_UNAVAILABLE`, `FIRST_STAGE_PENDING`,
+    `FIRST_STAGE_FAILED`, `PRIVILEGED_CONTEXT_UNPROVEN`, `AUTHENTICATION_FAILED`,
+    `BOOTSTRAP_ACQUIRED`, `KSU_HANDOFF`, `KSU_READY`, `TERMINAL_FAILURE`.
+  - `DfrBootstrapRequest` (exact target, mandatory kernel boot id, initial
+    state), `DfrPrincipal`, `DfrPrivilegedContext` (pid/uid/gid/SELinux
+    context/CapEff/CapBnd/mount namespace), `DfrRetryClassification`
+    (`NONE`/`PRE_BOOTSTRAP`/`POST_BOOTSTRAP`).
+  - `DfrBootstrapLog` — one structured `key=value` line carrying every handoff
+    evidence field for the Auto Root history (item 4).
+  - `DfrBootstrapResult` — the terminal/milestone result. Its `init` block
+    enforces the safety invariants in code: a bootstrap-proven state MUST report
+    the exploit retry budget closed (AGENTS.md §11), and a post-bootstrap
+    terminal failure can never be reclassified pre-bootstrap (AGENTS.md §18).
+  - `DfrBootstrapProvider` — the SINGLE frontier (item 2). A real OR simulated
+    provider can be substituted without touching the rest of Auto Root (item 1).
+  - `DfrBootstrapFeatureGate` — LAB feature gate/registry (items 9, 10):
+    `realProviderAvailable()` is `false` and `resolveRealProvider()` returns
+    `null`, so Auto Root's route selector can never pick DFR. This mirrors
+    `DfrIntegrationContract.mayInvokeAlternativeBootstrap = false`. The
+    authorized target reuses `DfrKsuReuseGate.EXACT_TARGET`.
+  - `DfrBootstrapGuards` — shared fail-closed preflight (unauthorized target and
+    missing boot id are rejected before any first stage; item 12).
+- `app/src/main/java/dev/busung/s25uroot/DfrHandoffAuthentication.kt`
+  - Peer-authentication contract SEPARATE from `RootHelperShell`/GhostLock
+    (item 5; AGENTS.md §13). A per-attempt secret + boot/principal-bound
+    challenge; the client returns a SHA-256 token; a foreign uid-0 process
+    without the secret cannot authenticate. Constant-time comparison. "uid 0"
+    alone is `UID_ONLY_REJECTED`.
+- `app/src/main/java/dev/busung/s25uroot/DfrSimulatedBootstrapProvider.kt`
+  - Deterministic **simulated** provider (item 11). Every scenario is covered:
+    full success, wrong target, missing boot id, privileged-context-unproven,
+    authentication failure, bootstrap-success-only (stops with full evidence per
+    item 15), KernelSU-handoff failure and KernelSU-readiness failure. All logs
+    are marked `simulated=true`. A full success labels its KernelSU stage with
+    the exact existing RMG daemon name, never the upstream/generic module.
+- Tests: `app/src/test/.../DfrBootstrapProviderTest.kt` (15 tests) and
+  `DfrHandoffAuthenticationTest.kt` (6 tests) prove: wrong firmware/target
+  blocks before bootstrap; a right token without proven firmware identity is
+  refused; boot id is mandatory; the `WRONG_TARGET`/`MISSING_BOOT_ID` simulator
+  scenarios fail closed by themselves; privileged context must be explicitly
+  proven; authentication is separate from uid; bootstrap closes the exploit
+  retry budget; a KernelSU failure is post-bootstrap, never replays and keeps
+  `bootstrapAcquired` true; full success reuses the existing RMG KernelSU; no
+  real provider is registered.
+
+### Review-driven hardening (Codex bot, PR #16)
+
+Three P2 findings were verified and fixed rather than waived:
+- `DfrBootstrapRequest.exactFirmwareProven` (default false) is now required by
+  the shared guard: the target token alone is a caller assertion and fails
+  closed; a real provider must set it only from
+  `TargetProfile.matchesExact(DeviceSnapshot.current())` (AGENTS.md §3).
+- `DfrBootstrapResult.bootstrapEverAcquired` is a monotonic fact preserved
+  across post-bootstrap terminal failures; `bootstrapAcquired` now reads it, and
+  the `init` block requires the retry budget closed for ANY state once bootstrap
+  was acquired (not only when it already happened to be closed), so a
+  post-bootstrap failure can never be mistaken for a safe replay (AGENTS.md §11).
+- The simulator's `WRONG_TARGET`/`MISSING_BOOT_ID` scenarios now force their
+  fail-closed input regardless of the request handed in.
+
+### Validation status (be explicit)
+
+- **Implemented (code):** the abstraction, authentication contract, simulated
+  provider and feature gate above.
+- **Simulated only:** every "privileged"/"bootstrap"/"KernelSU" transition. No
+  real first stage exists; the simulator fabricates typed evidence.
+- **Locally validated (this session, off-device):** `kotlinc` 2.0.21 compiled
+  all new main+test sources with no errors; the 18 new JUnit tests passed
+  (`OK (18 tests)`). This is not the project's Android CI and not hardware.
+- **CI:** to be confirmed on the PR by the existing `dfr-ksu-reuse-gate.yml`
+  Android job (full `:app:testDebugUnitTest`, `lintDebug`, `assembleDebug`).
+- **Hardware:** nothing. No device operation was performed or is implied.
+- **Still pending:** a real `DfrBootstrapProvider` first stage; the off-device
+  Samsung Android 17 StageHop/NetworkStack/XFRM/SELinux/seccomp analysis
+  (item 13, unchanged from §39 next-steps 3); route selection wiring into Auto
+  Root (items 9, 16) — intentionally NOT done until the provider is validated
+  in isolation and then on recoverable hardware.
+
+This HANDOFF state is mirrored to production documentation only, as required by
+AGENTS.md §22. No production application code, payload, route, manifest or
+release behavior is promoted by that documentation sync. The completion
+criteria of the DirtyFrag handoff are unchanged and unmet — green CI or passing
+simulation is explicitly not a working Dirty Frag port.
+
+## 41. DirtyFrag Phase A reclassified around exact userspace evidence (2026-09-24)
+
+Scope remains Phase A only. No DirtyFrag exploit was executed and no Android/root
+hot path, KernelSU path, payload or production repository was modified.
+
+The earlier Phase A result used `BLOCKED` for two different situations. This
+has been corrected.
+
+### A1/A2 — decidable, but missing exact ZZIC userspace/policy artifacts
+
+These gates are now:
+`BLOCKED_ON_MISSING_EXACT_USERSPACE_ARTIFACTS`.
+
+They are not considered impossible or intrinsically unprovable. They require a
+new read-only userspace evidence collection from the already-authorized rooted
+ZZIC device:
+
+- A1 StageHop:
+  `/system/framework/services.jar` and `framework.jar`, plus related
+  bootclasspath artifacts if the Samsung implementation is split/oat-backed.
+  Offline goal: inspect exact `ProcessRecord` thread fields/accessors and the
+  concrete `IApplicationThread$Stub$Proxy.scheduleReceiver` signature/arity.
+- A2 SELinux:
+  preferred evidence is the exact normal-boot
+  `/sys/fs/selinux/policy` dump. Reading it may legitimately fail because of
+  `security_t:security read_policy`; that failure is evidence and must not be
+  bypassed by changing SELinux. Second-best evidence is exact policy material
+  from system/system_ext/product/vendor/odm partitions, explicitly labeled
+  weaker than the loaded-policy dump.
+- A2 seccomp:
+  exact `/apex/com.android.runtime/lib64/bionic/libc.so` and exact
+  `/system/etc/seccomp_policy/*` or equivalent build-specific policy
+  artifacts. Offline goal: derive the real syscall policy used by the relevant
+  zygote/app process and compare it with the pinned first-stage syscall set.
+- A2 native loader / dlopen:
+  exact `/linkerconfig/ld.config.txt`, candidate APK/native-library placement,
+  and the SELinux evidence above. Offline goal: determine the actual namespace
+  and file-loading permissions for `network_stack`.
+
+The earlier "no more device collection required" statement applied to the
+kernel-only audit. It does not apply to these userspace/policy gates. A new
+collector is permitted only if it remains read-only: no exploit, package DB
+edit, module load, SELinux change, persistence, boot receiver or Auto Root run.
+Unreadable files must be recorded as unreadable, not bypassed.
+
+### A3 — universal-negative gate removed
+
+The former gate "prove no alternative Samsung mitigation exists" is
+epistemically malformed and must not remain a roadmap condition.
+
+A3 is now a finite candidate matrix. Each candidate receives PASS/FAIL with
+explicit scope; anything outside the matrix remains
+`UNKNOWN_BY_CONSTRUCTION`.
+
+Current matrix:
+- four public CVE-2026-43284 reference additions — PASS for this finite
+  candidate; exact compiled additions are absent;
+- immediate `skb_splice_from_iter` / `skb_append_pagefrags` /
+  `__skb_zcopy_downgrade_managed` chain — PASS for the bounded reviewed
+  chain;
+- RKP/KDP controls relevant to the contemplated primitive — PENDING;
+- DEFEX controls relevant to helper/module/mount path — PENDING;
+- Knox/hypervisor enforcement relevant to the primitive — PENDING;
+- additional skb/page-cache hardening beyond the reviewed chain — PENDING;
+- Samsung-specific XFRM/ESP deltas beyond the four reference additions —
+  PENDING;
+- relevant exact `CONFIG_` hardening deltas — PENDING.
+
+Do not convert `UNKNOWN_BY_CONSTRUCTION` into PASS and do not require universal
+absence as a completion condition.
+
+### Stop condition and project state
+
+Phase A is still not complete. A1/A2 are blocked on exact userspace evidence and
+the finite A3 matrix remains incomplete. Therefore Fases B–F remain frozen:
+
+- no real `DfrBootstrapProvider`;
+- `DfrBootstrapFeatureGate.realProviderAvailable() == false`;
+- `DfrIntegrationContract ==
+  EXPERIMENTAL_EXECUTION_NOT_IMPLEMENTED`;
+- no DirtyFrag route selection in Auto Root;
+- no changes to Manual Root, GhostLock/RMG exploit, FOPS/P0/timings, retry
+  safety or KernelSU lifecycle;
+- production remains frozen.
+
+Current project-level state:
+
+`DIRTYFRAG_END_TO_END = BLOCKED_ON_USERSPACE_EVIDENCE`
+
+This is the immediate dependency state, not a success classification. Once
+A1/A2 are actually closed, but before same-boot end-to-end hardware evidence
+exists, the state becomes `DIRTYFRAG_END_TO_END = UNVERIFIED`.
+
+Detailed taxonomy, artifact list and A3 matrix:
+`docs/DFREROOT_PHASE_A_GATES_2026-09-24.md`.
+
+## 42. DirtyFrag Phase A diagnostic executables and finite A3 evidence (2026-09-24)
+
+PR #17 branch `claude/dfr-phase-a-gates-20260924` now converts the remaining
+Phase A evidence work into explicit read-only executables. No real
+`DfrBootstrapProvider`, DirtyFrag execution, Auto Root routing, module load,
+SELinux change, package DB mutation, persistence or production behavior was
+added.
+
+Implemented LAB tools:
+- `tools/dfreroot/collect_zzic_userspace_gates.py`: exact ZZIC identity gate
+  before `su`; then read-only collection of exact framework jars/classpaths,
+  preferred loaded `/sys/fs/selinux/policy`, partition SELinux fallback
+  material, exact Bionic `libc.so`, seccomp policy files, linkerconfig,
+  package paths/SELinux labels and NetworkStack runtime evidence. Every
+  retained file gets size/SHA-256 provenance. An unreadable file is recorded;
+  no bypass is attempted.
+- `tools/dfreroot/analyze_zzic_userspace_gates.py`: offline archive integrity
+  verification; exact JADX audit for the StageHop reflection/signature
+  contract; exact loaded-policy `sesearch` queries; exact Bionic seccomp
+  analysis; linker/package evidence inventory.
+- `tools/dfreroot/offline_bionic_seccomp.py`: parses an exact ELF64/AArch64
+  Bionic `libc.so`, attributes `arm64_app_filter` and its size when the
+  symbols are present, evaluates each enumerated first-stage/native-loader
+  syscall through the exact cBPF tree, and only reports
+  `PASS_EXACT_APP_FILTER` when every required syscall reaches
+  `SECCOMP_RET_ALLOW`. Stripped/unattributable filters remain unresolved.
+- `tools/dfreroot/offline_a3_candidate_matrix.py`: finite exact-kernel A3
+  audit using the existing machine-checked Image hashes, embedded kallsyms and
+  authenticated exact config. Mechanisms outside the named set remain
+  `UNKNOWN_BY_CONSTRUCTION`.
+
+Exact retained-artifact A3 findings:
+- four public CVE-2026-43284 reference additions: PASS for that finite
+  candidate;
+- immediate splice/page-frag helper chain: PASS for the bounded reviewed
+  chain;
+- direct calls from the seven exact primitive/helper bodies to enumerated
+  RKP/KDP/DEFEX/FIVE/PROCA/hypervisor symbols: PASS_BOUNDED; none were found;
+- finite 12-function XFRM/ESP ZZI4→ZZIC delta: PASS_BOUNDED. Eleven windows are
+  byte-identical. `xfrm_add_sa` differs in three instructions only, all
+  address materialization for strings immediately consumed by the same two
+  `fortify_panic` calls; no new XFRM guard is present in that finite delta.
+  The normalization is deliberately limited to ADRP+ADD x0 immediately before
+  `fortify_panic`; arbitrary immediates/structure offsets are never masked.
+- exact config hardening inventory confirms RKP/KDP/DEFEX/Knox/XFRM and other
+  hardening options exist; feature presence is not treated as proof that the
+  DirtyFrag primitive is blocked.
+- remaining finite A3 candidate:
+  `DEFEX_exec_helper_module_mount_semantics =
+  PENDING_EXACT_POLICY_PATH_REVIEW`.
+
+Synthetic regression coverage was added for the userspace collector/analyzer,
+finite A3 semantics, narrow fortify normalization and exact Bionic seccomp
+evaluator. `.github/workflows/dfreroot-offline-audit.yml` compiles the new
+tools and runs the new suites. The PR workflow now also watches the Phase A
+HANDOFF/docs, so the final PR head is revalidated after documentation changes.
+
+Immediate progression is now a single exact-device read-only collection:
+
+```bash
+cd "$HOME/RMGLabs"
+git fetch origin claude/dfr-phase-a-gates-20260924
+git switch claude/dfr-phase-a-gates-20260924
+git pull --ff-only
+
+rm -rf "$HOME/RMG_DFR_ZZIC_USERSPACE_GATES"
+rm -f "$HOME/RMG_DFR_ZZIC_USERSPACE_GATES.tar.gz"
+
+python3 tools/dfreroot/collect_zzic_userspace_gates.py
+
+cp "$HOME/RMG_DFR_ZZIC_USERSPACE_GATES.tar.gz" \
+  /storage/emulated/0/Download/
+```
+
+The next analysis input is exactly
+`RMG_DFR_ZZIC_USERSPACE_GATES.tar.gz`. The prior exact kernel/kallsyms evidence
+does not need to be recollected unless firmware/kernel identity changes.
+
+Current global state remains:
+
+`DIRTYFRAG_END_TO_END = BLOCKED_ON_USERSPACE_EVIDENCE`
+
+Fases B-F remain frozen until the new archive is analyzed and the remaining
+Phase A gates are dispositioned.
+
